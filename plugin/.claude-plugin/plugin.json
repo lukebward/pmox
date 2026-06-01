@@ -1,0 +1,11 @@
+{
+  "name": "pmox",
+  "displayName": "Proxmox (pmox)",
+  "version": "0.1.0",
+  "description": "Explore and manage a Proxmox VE cluster from Claude Code via the pmox CLI. Read-only by default, with explicit --dangerous and --yes gates before anything changes.",
+  "author": {
+    "name": "Luke Ward"
+  },
+  "keywords": ["proxmox", "pve", "virtualization", "homelab", "infrastructure", "cli"],
+  "license": "MIT"
+}

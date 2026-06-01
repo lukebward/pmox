@@ -1,0 +1,14 @@
+{
+  "name": "pmox-marketplace",
+  "owner": {
+    "name": "Luke Ward"
+  },
+  "description": "Marketplace hosting the pmox Proxmox plugin.",
+  "plugins": [
+    {
+      "name": "pmox",
+      "source": "./plugin",
+      "description": "Explore and manage a Proxmox VE cluster via the pmox CLI (read-only by default)."
+    }
+  ]
+}

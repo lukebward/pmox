@@ -1,0 +1,388 @@
+"""CLI-level tests using Typer's runner with an injected fake client.
+
+These exercise every command plus the two-tier safety model end to end:
+    * read-only by default            -> mutations exit 4
+    * --dangerous enables mutations   -> non-destructive ops succeed
+    * destructive ops still need --yes -> exit 3 without it
+"""
+
+import json
+
+import pytest
+from typer.testing import CliRunner
+
+import pmox.cli as cli
+
+runner = CliRunner()
+
+
+def inv(args, creds, **kwargs):
+    return runner.invoke(cli.app, args, env=creds, **kwargs)
+
+
+# ---------------------------------------------------------------- read-only --
+
+
+def test_server_version(fake_client, creds):
+    fake_client.version.return_value = {"version": "8.1.4"}
+    r = inv(["version"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.version.assert_called_once_with()
+
+
+def test_server_version_json(fake_client, creds):
+    fake_client.version.return_value = {"version": "8.1.4"}
+    r = inv(["--json", "version"], creds)
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output) == {"version": "8.1.4"}
+
+
+def test_nodes_list(fake_client, creds):
+    fake_client.list_nodes.return_value = [{"node": "pve1", "status": "online"}]
+    r = inv(["nodes", "list"], creds)
+    assert r.exit_code == 0, r.output
+    assert "pve1" in r.output
+
+
+def test_nodes_status(fake_client, creds):
+    fake_client.node_status.return_value = {"uptime": 100}
+    r = inv(["nodes", "status", "pve1"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.node_status.assert_called_once_with("pve1")
+
+
+def test_vm_list_json(fake_client, creds):
+    data = [{"vmid": 100, "name": "web", "type": "qemu", "status": "running", "node": "pve1"}]
+    fake_client.list_guests.return_value = data
+    r = inv(["--json", "vm", "list"], creds)
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output) == data
+    fake_client.list_guests.assert_called_once_with("qemu", node=None)
+
+
+def test_ct_list(fake_client, creds):
+    fake_client.list_guests.return_value = []
+    r = inv(["ct", "list"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.list_guests.assert_called_once_with("lxc", node=None)
+
+
+def test_vm_status_autoresolves_node(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    fake_client.guest_status.return_value = {"status": "running"}
+    r = inv(["vm", "status", "100"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.resolve_node.assert_called_once_with(100)
+    fake_client.guest_status.assert_called_once_with("pve1", "qemu", 100)
+
+
+def test_vm_status_with_explicit_node_skips_resolve(fake_client, creds):
+    fake_client.guest_status.return_value = {"status": "running"}
+    r = inv(["vm", "status", "100", "--node", "pve2"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.resolve_node.assert_not_called()
+    fake_client.guest_status.assert_called_once_with("pve2", "qemu", 100)
+
+
+def test_vm_config(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    fake_client.guest_config.return_value = {"cores": 2}
+    r = inv(["vm", "config", "100"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.guest_config.assert_called_once_with("pve1", "qemu", 100)
+
+
+def test_resolve_failure_exit1(fake_client, creds):
+    fake_client.resolve_node.return_value = None
+    r = inv(["vm", "status", "999"], creds)
+    assert r.exit_code == 1, r.output
+
+
+def test_storage_list(fake_client, creds):
+    fake_client.cluster_resources.return_value = [{"storage": "local", "node": "pve1"}]
+    r = inv(["storage", "list"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.cluster_resources.assert_called_once_with(type="storage")
+
+
+def test_storage_list_node_filter(fake_client, creds):
+    fake_client.cluster_resources.return_value = [
+        {"storage": "local", "node": "pve1"},
+        {"storage": "local", "node": "pve2"},
+    ]
+    r = inv(["--json", "storage", "list", "--node", "pve1"], creds)
+    assert r.exit_code == 0, r.output
+    assert all(row["node"] == "pve1" for row in json.loads(r.output))
+
+
+def test_storage_content(fake_client, creds):
+    fake_client.storage_content.return_value = [{"volid": "x"}]
+    r = inv(["storage", "content", "local", "--node", "pve1"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.storage_content.assert_called_once_with("pve1", "local")
+
+
+def test_cluster_status_table(fake_client, creds):
+    fake_client.cluster_status.return_value = [
+        {"type": "cluster", "name": "cl"},
+        {"type": "node", "name": "pve1", "online": 1},
+    ]
+    r = inv(["cluster", "status"], creds)
+    assert r.exit_code == 0, r.output
+    assert "pve1" in r.output
+
+
+def test_cluster_status_json(fake_client, creds):
+    data = [{"type": "node", "name": "pve1", "online": 1}]
+    fake_client.cluster_status.return_value = data
+    r = inv(["--json", "cluster", "status"], creds)
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output) == data
+
+
+def test_cluster_resources(fake_client, creds):
+    fake_client.cluster_resources.return_value = [{"type": "vm", "vmid": 100}]
+    r = inv(["cluster", "resources", "--type", "vm"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.cluster_resources.assert_called_once_with(type="vm")
+
+
+def test_task_list(fake_client, creds):
+    fake_client.list_tasks.return_value = [{"upid": "U", "type": "x"}]
+    r = inv(["task", "list", "--node", "pve1"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.list_tasks.assert_called_once_with("pve1", limit=50)
+
+
+def test_task_status(fake_client, creds):
+    fake_client.task_status.return_value = {"status": "OK"}
+    r = inv(["task", "status", "UPID:x", "--node", "pve1"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.task_status.assert_called_once_with("pve1", "UPID:x")
+
+
+def test_task_log_text(fake_client, creds):
+    fake_client.task_log.return_value = [{"n": 1, "t": "line one"}, {"n": 2, "t": "line two"}]
+    r = inv(["task", "log", "UPID:x", "--node", "pve1"], creds)
+    assert r.exit_code == 0, r.output
+    assert "line one" in r.output
+
+
+def test_task_log_json(fake_client, creds):
+    data = [{"n": 1, "t": "line one"}]
+    fake_client.task_log.return_value = data
+    r = inv(["--json", "task", "log", "UPID:x", "--node", "pve1"], creds)
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output) == data
+
+
+# ------------------------------------------------------------- safety gates --
+
+
+def test_start_blocked_in_readonly(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["vm", "start", "100"], creds)
+    assert r.exit_code == 4, r.output
+    fake_client.guest_power.assert_not_called()
+
+
+def test_start_allowed_in_dangerous(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["--dangerous", "vm", "start", "100"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.guest_power.assert_called_once_with("pve1", "qemu", 100, "start")
+
+
+def test_pmox_dangerous_env_enables_writes(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["vm", "start", "100"], dict(creds, PMOX_DANGEROUS="1"))
+    assert r.exit_code == 0, r.output
+    fake_client.guest_power.assert_called_once_with("pve1", "qemu", 100, "start")
+
+
+@pytest.mark.parametrize("action", ["shutdown", "reboot", "suspend", "resume"])
+def test_nondestructive_power(fake_client, creds, action):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["--dangerous", "vm", action, "100"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.guest_power.assert_called_once_with("pve1", "qemu", 100, action)
+
+
+@pytest.mark.parametrize("action", ["stop", "reset"])
+def test_destructive_power_needs_yes(fake_client, creds, action):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["--dangerous", "vm", action, "100"], creds)
+    assert r.exit_code == 3, r.output
+    fake_client.guest_power.assert_not_called()
+
+    r2 = inv(["--dangerous", "vm", action, "100", "--yes"], creds)
+    assert r2.exit_code == 0, r2.output
+    fake_client.guest_power.assert_called_once_with("pve1", "qemu", 100, action)
+
+
+def test_create_vm(fake_client, creds):
+    r = inv(
+        ["--dangerous", "vm", "create", "105", "--node", "pve1", "--name", "web", "-o", "cores=2"],
+        creds,
+    )
+    assert r.exit_code == 0, r.output
+    fake_client.create_guest.assert_called_once_with("pve1", "qemu", 105, name="web", cores="2")
+
+
+def test_create_ct_uses_hostname(fake_client, creds):
+    r = inv(["--dangerous", "ct", "create", "205", "--node", "pve1", "--name", "box"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.create_guest.assert_called_once_with("pve1", "lxc", 205, hostname="box")
+
+
+def test_create_bad_option_exit1(fake_client, creds):
+    r = inv(["--dangerous", "vm", "create", "105", "--node", "pve1", "-o", "noequals"], creds)
+    assert r.exit_code == 1, r.output
+    fake_client.create_guest.assert_not_called()
+
+
+def test_clone(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(
+        ["--dangerous", "vm", "clone", "100", "--newid", "105", "--full", "--name", "copy", "--target", "pve2"],
+        creds,
+    )
+    assert r.exit_code == 0, r.output
+    fake_client.clone_guest.assert_called_once_with("pve1", "qemu", 100, 105, name="copy", full=1, target="pve2")
+
+
+def test_migrate_needs_yes(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["--dangerous", "vm", "migrate", "100", "--target", "pve2"], creds)
+    assert r.exit_code == 3, r.output
+
+    r2 = inv(["--dangerous", "vm", "migrate", "100", "--target", "pve2", "--online", "--yes"], creds)
+    assert r2.exit_code == 0, r2.output
+    fake_client.migrate_guest.assert_called_once_with("pve1", "qemu", 100, "pve2", online=1)
+
+
+def test_delete_blocked_in_readonly_before_confirm(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["vm", "delete", "100", "--yes"], creds)
+    assert r.exit_code == 4, r.output  # write gate fires before the confirm gate
+    fake_client.delete_guest.assert_not_called()
+
+
+def test_delete_needs_yes(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["--dangerous", "vm", "delete", "100"], creds)
+    assert r.exit_code == 3, r.output
+    fake_client.delete_guest.assert_not_called()
+
+
+def test_delete_ok_with_purge(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    fake_client.delete_guest.return_value = "UPID"
+    r = inv(["--dangerous", "vm", "delete", "100", "--yes", "--purge"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.delete_guest.assert_called_once_with("pve1", "qemu", 100, purge=True)
+
+
+def test_ok_json_envelope(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    fake_client.guest_power.return_value = "UPID:task"
+    r = inv(["--json", "--dangerous", "vm", "start", "100"], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["ok"] is True
+    assert payload["result"] == "UPID:task"
+
+
+# --------------------------------------------------------------- snapshots ---
+
+
+def test_snapshot_list(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    fake_client.list_snapshots.return_value = [{"name": "pre"}]
+    r = inv(["vm", "snapshot", "list", "100"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.list_snapshots.assert_called_once_with("pve1", "qemu", 100)
+
+
+def test_snapshot_create_needs_dangerous(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["vm", "snapshot", "create", "100", "snap1"], creds)
+    assert r.exit_code == 4, r.output
+    fake_client.create_snapshot.assert_not_called()
+
+
+def test_snapshot_create(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["--dangerous", "vm", "snapshot", "create", "100", "snap1", "-d", "desc", "--vmstate"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.create_snapshot.assert_called_once_with("pve1", "qemu", 100, "snap1", description="desc", vmstate=1)
+
+
+def test_snapshot_delete_needs_yes(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["--dangerous", "vm", "snapshot", "delete", "100", "snap1"], creds)
+    assert r.exit_code == 3, r.output
+
+    r2 = inv(["--dangerous", "vm", "snapshot", "delete", "100", "snap1", "--yes"], creds)
+    assert r2.exit_code == 0, r2.output
+    fake_client.delete_snapshot.assert_called_once_with("pve1", "qemu", 100, "snap1")
+
+
+def test_snapshot_rollback(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["--dangerous", "vm", "snapshot", "rollback", "100", "snap1", "--yes"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.rollback_snapshot.assert_called_once_with("pve1", "qemu", 100, "snap1")
+
+
+# ----------------------------------------------------------- config / meta ---
+
+
+def test_missing_credentials_exit2():
+    r = runner.invoke(
+        cli.app,
+        ["nodes", "list"],
+        env={
+            "PROXMOX_HOST": "",
+            "PROXMOX_TOKEN_ID": "",
+            "PROXMOX_TOKEN_SECRET": "",
+            "PMOX_CONFIG": "/nonexistent-pmox-config.toml",
+        },
+    )
+    assert r.exit_code == 2, r.output
+
+
+def test_version_flag():
+    r = runner.invoke(cli.app, ["--version"])
+    assert r.exit_code == 0
+    assert "pmox" in r.output
+
+
+def test_main_invokes_app(monkeypatch):
+    called = {}
+    monkeypatch.setattr(cli, "app", lambda: called.setdefault("ran", True))
+    cli.main()
+    assert called["ran"] is True
+
+
+def test_callback_config_error_exit2(monkeypatch):
+    from pmox.config import ConfigError
+
+    def boom(*args, **kwargs):
+        raise ConfigError("bad config file")
+
+    monkeypatch.setattr(cli, "load_settings", boom)
+    r = runner.invoke(cli.app, ["nodes", "list"], env={})
+    assert r.exit_code == 2, r.output
+
+
+def test_callback_dotenv_failure_is_ignored(fake_client, creds, monkeypatch):
+    import dotenv
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("dotenv blew up")
+
+    monkeypatch.setattr(dotenv, "load_dotenv", boom)
+    fake_client.list_nodes.return_value = []
+    r = runner.invoke(cli.app, ["nodes", "list"], env=creds)
+    assert r.exit_code == 0, r.output
