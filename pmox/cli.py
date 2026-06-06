@@ -532,7 +532,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
             resolved = node or _resolve_node_or_die(client, vmid)
             emit(client.guest_config(resolved, kind, vmid), json_output=ctx.obj.json, title=f"{label} {vmid} config")
 
-    @group.command("set")
+    @group.command("set", help=f"Update configuration of a {label} (cores, memory, disks, nics, tags, …).")
     def _set(
         ctx: typer.Context,
         vmid: int = vmid_arg,
@@ -542,7 +542,6 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
         node: Optional[str] = node_opt,
         yes: bool = yes_opt,
     ):
-        """Update configuration of a {label} (cores, memory, disks, nics, tags, …)."""
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
             params = parse_options(option)
