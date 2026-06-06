@@ -685,3 +685,14 @@ def test_power_wait_reports_task(fake_client, creds, monkeypatch):
     assert r.exit_code == 0, r.output
     payload = json.loads(r.output)
     assert payload["result"]["exitstatus"] == "OK"
+
+
+# ------------------------------------------------- Task 7: create/clone/migrate/delete/snap via _execute --
+
+
+def test_delete_dry_run_skips_call(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["--dry-run", "vm", "delete", "100"], creds)
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["op"] == "qemu.delete"
+    fake_client.delete_guest.assert_not_called()

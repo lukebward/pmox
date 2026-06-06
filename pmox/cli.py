@@ -163,11 +163,6 @@ def _get_client(ctx: typer.Context) -> ProxmoxClient:
     return state.client
 
 
-def _require_dangerous(ctx: typer.Context) -> None:
-    """Refuse a mutating command unless dangerous (write) mode is enabled."""
-    require_dangerous(ctx.obj.dangerous)
-
-
 def _resolve_node_or_die(client: ProxmoxClient, vmid: int) -> str:
     node = client.resolve_node(vmid)
     if not node:
@@ -542,7 +537,6 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
         ),
     ):
         with error_boundary(ctx.obj.json):
-            _require_dangerous(ctx)
             client = _get_client(ctx)
             params = {}
             if name:
@@ -552,8 +546,14 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                     raise ValueError(f"--option must be key=value (got {item!r}).")
                 key, value = item.split("=", 1)
                 params[key] = value
-            result = client.create_guest(node, kind, vmid, **params)
-            _ok(ctx, f"Creating {label.lower()} {vmid} on {node}", result)
+            _execute(
+                ctx,
+                op=f"{kind}.create",
+                message=f"Creating {label.lower()} {vmid} on {node}",
+                node=node,
+                call=lambda: client.create_guest(node, kind, vmid, **params),
+                params={"vmid": vmid, **params},
+            )
 
     @group.command("clone")
     def _clone(
@@ -566,7 +566,6 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
         node: Optional[str] = node_opt,
     ):
         with error_boundary(ctx.obj.json):
-            _require_dangerous(ctx)
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, vmid)
             params = {}
@@ -576,8 +575,14 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 params["full"] = 1
             if target:
                 params["target"] = target
-            result = client.clone_guest(resolved, kind, vmid, newid, **params)
-            _ok(ctx, f"Cloning {label.lower()} {vmid} → {newid}", result)
+            _execute(
+                ctx,
+                op=f"{kind}.clone",
+                message=f"Cloning {label.lower()} {vmid} → {newid}",
+                node=resolved,
+                call=lambda: client.clone_guest(resolved, kind, vmid, newid, **params),
+                params={"newid": newid, **params},
+            )
 
     @group.command("migrate")
     def _migrate(
@@ -589,15 +594,22 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
         yes: bool = yes_opt,
     ):
         with error_boundary(ctx.obj.json):
-            _require_dangerous(ctx)
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, vmid)
-            confirm(f"migrate {label.lower()} {vmid} from {resolved} to {target}", assume_yes=yes)
             params = {}
             if online:
                 params["online"] = 1
-            result = client.migrate_guest(resolved, kind, vmid, target, **params)
-            _ok(ctx, f"Migrating {label.lower()} {vmid} → {target}", result)
+            _execute(
+                ctx,
+                op=f"{kind}.migrate",
+                message=f"Migrating {label.lower()} {vmid} → {target}",
+                node=resolved,
+                call=lambda: client.migrate_guest(resolved, kind, vmid, target, **params),
+                params={"target": target, **params},
+                destructive=True,
+                yes=yes,
+                confirm_msg=f"migrate {label.lower()} {vmid} from {resolved} to {target}",
+            )
 
     @group.command("delete")
     def _delete(
@@ -608,12 +620,19 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
         yes: bool = yes_opt,
     ):
         with error_boundary(ctx.obj.json):
-            _require_dangerous(ctx)
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, vmid)
-            confirm(f"DELETE {label.lower()} {vmid} on {resolved} (irreversible)", assume_yes=yes)
-            result = client.delete_guest(resolved, kind, vmid, purge=purge)
-            _ok(ctx, f"Deleted {label.lower()} {vmid} on {resolved}", result)
+            _execute(
+                ctx,
+                op=f"{kind}.delete",
+                message=f"Deleted {label.lower()} {vmid} on {resolved}",
+                node=resolved,
+                call=lambda: client.delete_guest(resolved, kind, vmid, purge=purge),
+                params={"vmid": vmid, "purge": purge},
+                destructive=True,
+                yes=yes,
+                confirm_msg=f"DELETE {label.lower()} {vmid} on {resolved} (irreversible)",
+            )
 
     # snapshots (nested under the guest group)
     snap = typer.Typer(help=f"Manage {label} snapshots.", no_args_is_help=True)
@@ -640,7 +659,6 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
         node: Optional[str] = node_opt,
     ):
         with error_boundary(ctx.obj.json):
-            _require_dangerous(ctx)
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, vmid)
             params = {}
@@ -648,8 +666,14 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 params["description"] = description
             if vmstate:
                 params["vmstate"] = 1
-            result = client.create_snapshot(resolved, kind, vmid, name, **params)
-            _ok(ctx, f"Creating snapshot {name!r} of {label.lower()} {vmid}", result)
+            _execute(
+                ctx,
+                op=f"{kind}.snapshot.create",
+                message=f"Creating snapshot {name!r} of {label.lower()} {vmid}",
+                node=resolved,
+                call=lambda: client.create_snapshot(resolved, kind, vmid, name, **params),
+                params={"snapname": name, **params},
+            )
 
     @snap.command("delete")
     def _snap_delete(
@@ -660,12 +684,19 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
         yes: bool = yes_opt,
     ):
         with error_boundary(ctx.obj.json):
-            _require_dangerous(ctx)
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, vmid)
-            confirm(f"delete snapshot {name!r} of {label.lower()} {vmid}", assume_yes=yes)
-            result = client.delete_snapshot(resolved, kind, vmid, name)
-            _ok(ctx, f"Deleted snapshot {name!r} of {label.lower()} {vmid}", result)
+            _execute(
+                ctx,
+                op=f"{kind}.snapshot.delete",
+                message=f"Deleted snapshot {name!r} of {label.lower()} {vmid}",
+                node=resolved,
+                call=lambda: client.delete_snapshot(resolved, kind, vmid, name),
+                params={"snapname": name},
+                destructive=True,
+                yes=yes,
+                confirm_msg=f"delete snapshot {name!r} of {label.lower()} {vmid}",
+            )
 
     @snap.command("rollback")
     def _snap_rollback(
@@ -676,12 +707,19 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
         yes: bool = yes_opt,
     ):
         with error_boundary(ctx.obj.json):
-            _require_dangerous(ctx)
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, vmid)
-            confirm(f"ROLLBACK {label.lower()} {vmid} to snapshot {name!r} (loses current state)", assume_yes=yes)
-            result = client.rollback_snapshot(resolved, kind, vmid, name)
-            _ok(ctx, f"Rolling back {label.lower()} {vmid} → {name!r}", result)
+            _execute(
+                ctx,
+                op=f"{kind}.snapshot.rollback",
+                message=f"Rolling back {label.lower()} {vmid} → {name!r}",
+                node=resolved,
+                call=lambda: client.rollback_snapshot(resolved, kind, vmid, name),
+                params={"snapname": name},
+                destructive=True,
+                yes=yes,
+                confirm_msg=f"ROLLBACK {label.lower()} {vmid} to snapshot {name!r} (loses current state)",
+            )
 
     group.add_typer(snap, name="snapshot")
     return group
