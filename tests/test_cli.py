@@ -697,3 +697,19 @@ def test_delete_dry_run_skips_call(fake_client, creds):
     assert json.loads(r.output)["op"] == "qemu.delete"
     assert json.loads(r.output)["dry_run"] is True
     fake_client.delete_guest.assert_not_called()
+
+
+# ------------------------------------------------- Task 9: parse_options helper --
+
+
+def test_parse_options_ok():
+    assert cli.parse_options(["cores=4", "memory=4096"]) == {"cores": "4", "memory": "4096"}
+
+
+def test_parse_options_empty():
+    assert cli.parse_options(None) == {}
+
+
+def test_parse_options_rejects_no_equals():
+    with pytest.raises(ValueError):
+        cli.parse_options(["noequals"])

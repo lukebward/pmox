@@ -228,6 +228,17 @@ def _execute(
     return result
 
 
+def parse_options(items: Optional[List[str]]) -> dict:
+    """Parse repeatable ``-o key=value`` options into a dict."""
+    params: dict = {}
+    for item in items or []:
+        if "=" not in item:
+            raise ValueError(f"--option must be key=value (got {item!r}).")
+        key, value = item.split("=", 1)
+        params[key] = value
+    return params
+
+
 def _ok(ctx: typer.Context, message: str, result=None) -> None:
     state: State = ctx.obj
     if state.json:
@@ -541,11 +552,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
             params = {}
             if name:
                 params["name" if kind == "qemu" else "hostname"] = name
-            for item in option or []:
-                if "=" not in item:
-                    raise ValueError(f"--option must be key=value (got {item!r}).")
-                key, value = item.split("=", 1)
-                params[key] = value
+            params.update(parse_options(option))
             _execute(
                 ctx,
                 op=f"{kind}.create",
