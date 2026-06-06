@@ -181,3 +181,19 @@ def test_task_log(client, api):
     assert client.task_log("pve1", "UPID:x", limit=5) == [{"t": "x"}]
     api.nodes.return_value.tasks.assert_called_with("UPID:x")
     api.nodes.return_value.tasks.return_value.log.get.assert_called_once_with(limit=5)
+
+
+def test_update_config(client, api):
+    client.update_config("pve1", "qemu", 100, cores=4, memory=4096)
+    api.nodes.return_value.qemu.return_value.config.put.assert_called_once_with(cores=4, memory=4096)
+
+
+def test_resize_disk(client, api):
+    client.resize_disk("pve1", "qemu", 100, "scsi0", "+10G")
+    api.nodes.return_value.qemu.return_value.resize.put.assert_called_once_with(disk="scsi0", size="+10G")
+
+
+def test_cluster_nextid(client, api):
+    api.cluster.nextid.get.return_value = "101"
+    assert client.cluster_nextid() == "101"
+    api.cluster.nextid.get.assert_called_once_with()

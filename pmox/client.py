@@ -46,6 +46,10 @@ class ProxmoxClient:
             return self._api.cluster.resources.get(type=type)
         return self._api.cluster.resources.get()
 
+    def cluster_nextid(self) -> Any:
+        """Return the next free VMID from the cluster."""
+        return self._api.cluster.nextid.get()
+
     # ---- nodes ----
     def list_nodes(self) -> list:
         return self._api.nodes.get()
@@ -70,6 +74,14 @@ class ProxmoxClient:
 
     def guest_config(self, node: str, kind: str, vmid) -> dict:
         return self._guest(node, kind, vmid).config.get()
+
+    def update_config(self, node: str, kind: str, vmid, **params) -> Any:
+        """Set/update guest options (synchronous PUT on the config endpoint)."""
+        return self._guest(node, kind, vmid).config.put(**params)
+
+    def resize_disk(self, node: str, kind: str, vmid, disk: str, size: str) -> Any:
+        """Grow a disk. ``size`` is e.g. ``+10G`` (grow by) or ``50G`` (grow to)."""
+        return self._guest(node, kind, vmid).resize.put(disk=disk, size=size)
 
     def guest_power(self, node: str, kind: str, vmid, action: str) -> Any:
         """``action`` in: start/stop/shutdown/reboot/suspend/resume/reset."""
