@@ -13,10 +13,13 @@ nodes, storage, snapshots, or tasks.
 ## Invoking it
 
 Run `pmox <args>`. If `pmox` is not on PATH, fall back to `python -m pmox <args>`.
-Add `--json` whenever you need to parse output reliably:
+pmox **auto-detects** its output format: because your shell captures the output,
+pmox emits JSON automatically — you normally **don't need `--json`**. Parse that
+JSON to answer the user. Use `--no-json` only when you specifically want the
+human-readable table (e.g. to show it to the user verbatim).
 
 ```
-pmox --json vm list
+pmox vm list        # JSON automatically, because the output is captured
 ```
 
 If a command fails with a **config error** (exit 2), the user hasn't set

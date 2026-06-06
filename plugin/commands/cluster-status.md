@@ -6,12 +6,12 @@ allowed-tools: Bash(pmox:*), Bash(python:*)
 Give me a concise health overview of my Proxmox cluster using the **read-only**
 `pmox` CLI. Do NOT pass `--dangerous`.
 
-Run and interpret (use `--json` for parsing):
+Run and interpret (output is JSON automatically when captured):
 
-- `pmox --json cluster status`
-- `pmox --json nodes list`
-- `pmox --json vm list`
-- `pmox --json ct list`
+- `pmox cluster status`
+- `pmox nodes list`
+- `pmox vm list`
+- `pmox ct list`
 
 Then report:
 - Which nodes are online/offline.

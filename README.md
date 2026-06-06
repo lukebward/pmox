@@ -121,16 +121,18 @@ via the cluster resources endpoint.
 
 ## Using with an AI (e.g. Claude)
 
-Point the AI at the CLI and let it run commands via the shell. Recommended:
+Point the AI at the CLI and let it run commands via the shell. Because your shell
+captures pmox's output, it **emits JSON automatically** — the model gets
+structured output to parse with no flag, while you still see tables at your own
+terminal. (Force it either way with `--json` / `--no-json`, or globally with
+`PMOX_JSON=1` / `PMOX_JSON=0`.)
 
-- Set `PMOX_JSON=1` so every command returns structured JSON the model can parse.
 - Leave dangerous mode **off** for exploration. The AI literally cannot change
   anything without you adding `--dangerous` (and `--yes` for destructive ops),
   so accidental damage is impossible during read-only investigation.
 
 ```bash
-export PMOX_JSON=1
-pmox cluster resources           # AI explores freely, read-only
+pmox cluster resources           # AI explores freely, read-only (JSON auto)
 pmox vm status 100
 ```
 
@@ -147,7 +149,7 @@ This repo is also a Claude Code plugin (in [`plugin/`](plugin/)), so Claude can
 drive `pmox` for you with the safety gates intact:
 
 ```
-/plugin marketplace add C:\Users\Luke\Workspace\pmox
+/plugin marketplace add lukebward/pmox
 /plugin install pmox@pmox-marketplace
 ```
 

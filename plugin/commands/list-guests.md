@@ -6,7 +6,7 @@ allowed-tools: Bash(pmox:*), Bash(python:*)
 
 List my Proxmox guests using the **read-only** `pmox` CLI (do NOT pass `--dangerous`).
 
-Run `pmox --json vm list` and `pmox --json ct list`, then present a single
+Run `pmox vm list` and `pmox ct list` (JSON is emitted automatically), then present a single
 combined table sorted by node, then VMID, with columns:
 VMID · name · type (VM/CT) · node · status · CPU% · memory used / max.
 

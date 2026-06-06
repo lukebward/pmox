@@ -20,12 +20,12 @@ environment or a `.env` file.
 ## Install the plugin
 
 ```
-/plugin marketplace add C:\Users\Luke\Workspace\pmox
+/plugin marketplace add lukebward/pmox
 /plugin install pmox@pmox-marketplace
 ```
 
-(`/plugin marketplace add` takes the path to the repo root, where
-`.claude-plugin/marketplace.json` lives.)
+(`/plugin marketplace add` accepts a GitHub `owner/repo`, a git URL, or a local
+path to the repo root, where `.claude-plugin/marketplace.json` lives.)
 
 ## What you get
 

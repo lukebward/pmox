@@ -9,13 +9,17 @@ Global options live on the root callback and must precede the subcommand, e.g.::
     pmox --json vm list
     pmox --host 10.0.0.2 nodes list
 
-Set ``PMOX_JSON=1`` to default to JSON output (handy when an AI drives the CLI).
+Output format auto-detects: when stdout is piped or captured (e.g. an AI driving
+the CLI) pmox emits JSON; at an interactive terminal it prints tables. Override
+per-command with ``--json`` / ``--no-json``, or globally with ``PMOX_JSON``
+(``1``/``0``/``auto``).
 """
 
 from __future__ import annotations
 
 import json
 import os
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 from typing import List, Optional
@@ -40,6 +44,32 @@ from .safety import ConfirmationRequired, DangerousNotEnabled, confirm, require_
 
 # Indirection so tests can inject a fake client factory.
 _client_factory = ProxmoxClient.from_settings
+
+
+def _stream_isatty(stream) -> bool:
+    """True if ``stream`` is an interactive terminal; False if unknown or it errors."""
+    try:
+        return bool(stream.isatty())
+    except Exception:  # noqa: BLE001 - a stream that can't answer is treated as non-TTY
+        return False
+
+
+def resolve_json_output(flag: Optional[bool], env_value: Optional[str], stdout_isatty: bool) -> bool:
+    """Decide whether to emit JSON, in precedence order (highest first):
+
+    1. an explicit ``--json`` / ``--no-json`` flag,
+    2. the ``PMOX_JSON`` env var (``1``/``0``/``true``/``false``, or ``auto``),
+    3. auto-detect: when stdout is **not** a TTY (piped or captured, e.g. by an AI
+       driving the CLI) default to JSON; at an interactive terminal, tables.
+    """
+    if flag is not None:
+        return flag
+    if env_value is not None and env_value.strip() != "":
+        token = env_value.strip().lower()
+        if token == "auto":
+            return not stdout_isatty
+        return _parse_bool(token)
+    return not stdout_isatty
 
 
 class State:
@@ -205,7 +235,12 @@ app = typer.Typer(
 @app.callback()
 def main_callback(
     ctx: typer.Context,
-    json_output: bool = typer.Option(False, "--json", help="Output raw JSON (machine-readable; great for AI use)."),
+    json_output: Optional[bool] = typer.Option(
+        None,
+        "--json/--no-json",
+        help="Force JSON or human tables. Default: auto — JSON when output is piped/captured "
+        "(e.g. an AI driving the CLI), tables at an interactive terminal.",
+    ),
     dangerous: bool = typer.Option(
         False, "--dangerous", help="Enable dangerous (write/management) mode. Default is read-only (safe for AI exploration)."
     ),
@@ -241,7 +276,7 @@ def main_callback(
         err_console.print(f"[red]Config error:[/red] {exc}")
         raise typer.Exit(2)
 
-    json_on = json_output or _parse_bool(os.environ.get("PMOX_JSON"))
+    json_on = resolve_json_output(json_output, os.environ.get("PMOX_JSON"), _stream_isatty(sys.stdout))
     dangerous_on = dangerous or _parse_bool(os.environ.get("PMOX_DANGEROUS"))
     ctx.obj = State(settings=settings, json_output=json_on, dangerous=dangerous_on)
 

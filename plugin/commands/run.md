@@ -11,7 +11,9 @@ pmox $ARGUMENTS
 ```
 
 Guidelines:
-- Default to read-only. Add `--json` for reliable parsing where helpful.
+- Default to read-only. Output is JSON automatically when captured (your shell
+  captures it), so you can parse it directly; add `--no-json` only to show the
+  human table.
 - Include `--dangerous` (and `--yes` for destructive actions like
   `delete` / `stop` / `reset` / `migrate` / `rollback`) **only** if I explicitly
   asked to change or destroy something in the request above.

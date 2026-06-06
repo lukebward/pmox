@@ -127,7 +127,7 @@ def test_cluster_status_table(fake_client, creds):
         {"type": "cluster", "name": "cl"},
         {"type": "node", "name": "pve1", "online": 1},
     ]
-    r = inv(["cluster", "status"], creds)
+    r = inv(["--no-json", "cluster", "status"], creds)
     assert r.exit_code == 0, r.output
     assert "pve1" in r.output
 
@@ -163,7 +163,7 @@ def test_task_status(fake_client, creds):
 
 def test_task_log_text(fake_client, creds):
     fake_client.task_log.return_value = [{"n": 1, "t": "line one"}, {"n": 2, "t": "line two"}]
-    r = inv(["task", "log", "UPID:x", "--node", "pve1"], creds)
+    r = inv(["--no-json", "task", "log", "UPID:x", "--node", "pve1"], creds)
     assert r.exit_code == 0, r.output
     assert "line one" in r.output
 
@@ -386,3 +386,84 @@ def test_callback_dotenv_failure_is_ignored(fake_client, creds, monkeypatch):
     fake_client.list_nodes.return_value = []
     r = runner.invoke(cli.app, ["nodes", "list"], env=creds)
     assert r.exit_code == 0, r.output
+
+
+# --------------------------------------------------- output-mode resolution ---
+# JSON vs human tables. Precedence (highest first): explicit --json/--no-json
+# flag > PMOX_JSON env > auto-detect (not a TTY -> JSON, so agents/pipes get
+# machine-readable output for free while humans at a terminal get tables).
+
+
+@pytest.mark.parametrize(
+    "flag, env, isatty, expected",
+    [
+        # explicit flag always wins, regardless of env or TTY
+        (True, None, True, True),
+        (True, "0", True, True),
+        (False, None, False, False),
+        (False, "1", False, False),
+        # PMOX_JSON, when set, decides (no flag given)
+        (None, "1", True, True),
+        (None, "true", True, True),
+        (None, "yes", True, True),
+        (None, "0", False, False),
+        (None, "false", False, False),
+        # PMOX_JSON=auto defers to the TTY check
+        (None, "auto", True, False),
+        (None, "auto", False, True),
+        (None, "  AUTO  ", False, True),
+        # empty / unset env falls through to auto-detect
+        (None, "", False, True),
+        (None, None, True, False),   # human terminal -> tables
+        (None, None, False, True),   # captured / piped -> JSON
+    ],
+)
+def test_resolve_json_output(flag, env, isatty, expected):
+    assert cli.resolve_json_output(flag, env, isatty) is expected
+
+
+def test_stream_isatty_reports_true():
+    class TTY:
+        def isatty(self):
+            return True
+
+    assert cli._stream_isatty(TTY()) is True
+
+
+def test_stream_isatty_false_when_isatty_raises():
+    class Bad:
+        def isatty(self):
+            raise OSError("no tty here")
+
+    assert cli._stream_isatty(Bad()) is False
+
+
+def test_json_default_when_output_captured(fake_client, creds):
+    """Under the runner stdout is not a TTY, so JSON is the default with no flag."""
+    data = [{"vmid": 100, "name": "web"}]
+    fake_client.list_guests.return_value = data
+    r = inv(["vm", "list"], creds)
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output) == data
+
+
+def test_no_json_overrides_capture_default(fake_client, creds):
+    """--no-json forces the human table even when output is captured."""
+    data = [{"vmid": 100, "name": "web", "type": "qemu", "status": "running", "node": "pve1"}]
+    fake_client.list_guests.return_value = data
+    r = inv(["--no-json", "vm", "list"], creds)
+    assert r.exit_code == 0, r.output
+    assert "web" in r.output
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(r.output)
+
+
+def test_ok_human_envelope(fake_client, creds):
+    """--no-json yields the human success line, not the JSON envelope."""
+    fake_client.resolve_node.return_value = "pve1"
+    fake_client.guest_power.return_value = "UPID:task"
+    r = inv(["--no-json", "--dangerous", "vm", "start", "100"], creds)
+    assert r.exit_code == 0, r.output
+    assert "Start: vm 100 on pve1" in r.output
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(r.output)
