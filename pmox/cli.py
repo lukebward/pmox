@@ -42,6 +42,66 @@ from .output import (
 )
 from .safety import ConfirmationRequired, DangerousNotEnabled, confirm, require_dangerous
 
+# Global flags accepted in any position (hoisted to the front before Typer parses).
+_GLOBAL_BOOL_FLAGS = frozenset(
+    {
+        "--json",
+        "--no-json",
+        "--dangerous",
+        "--verify-ssl",
+        "--no-verify-ssl",
+        "--wait",
+        "--no-wait",
+        "--dry-run",
+        "--version",
+    }
+)
+_GLOBAL_VALUE_FLAGS = frozenset(
+    {"--host", "--port", "--token-id", "--token-secret", "--config", "--timeout"}
+)
+
+
+def hoist_global_flags(argv: List[str]) -> List[str]:
+    """Move recognised global flags (and their values) to the front of ``argv``.
+
+    Typer puts global options on the root callback, which Click only accepts
+    *before* the subcommand. This shim lets ``pmox vm set 100 --dangerous`` work
+    by lifting known global flags ahead of the subcommand. Command-level options
+    (``-o``, ``--node``, ``--size`` …) are left untouched. Anything after a bare
+    ``--`` is passed through verbatim.
+    """
+    head: List[str] = []
+    rest: List[str] = []
+    i = 0
+    passthrough = False
+    while i < len(argv):
+        tok = argv[i]
+        if passthrough:
+            rest.append(tok)
+            i += 1
+            continue
+        if tok == "--":
+            passthrough = True
+            rest.append(tok)
+            i += 1
+            continue
+        name = tok.split("=", 1)[0]
+        if name in _GLOBAL_BOOL_FLAGS:
+            head.append(tok)
+            i += 1
+        elif name in _GLOBAL_VALUE_FLAGS:
+            head.append(tok)
+            if "=" not in tok and i + 1 < len(argv):
+                head.append(argv[i + 1])
+                i += 2
+            else:
+                i += 1
+        else:
+            rest.append(tok)
+            i += 1
+    return head + rest
+
+
 # Indirection so tests can inject a fake client factory.
 _client_factory = ProxmoxClient.from_settings
 
@@ -637,7 +697,7 @@ app.add_typer(task_app, name="task")
 
 
 def main():
-    app()
+    app(args=hoist_global_flags(sys.argv[1:]))
 
 
 if __name__ == "__main__":  # pragma: no cover

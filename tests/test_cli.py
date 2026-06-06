@@ -369,11 +369,52 @@ def test_version_flag():
     assert "pmox" in r.output
 
 
+def test_hoist_moves_bool_flag_before_subcommand():
+    assert cli.hoist_global_flags(["vm", "set", "100", "--dangerous"]) == [
+        "--dangerous", "vm", "set", "100",
+    ]
+
+
+def test_hoist_moves_value_flag_space_form():
+    assert cli.hoist_global_flags(["vm", "list", "--timeout", "5"]) == [
+        "--timeout", "5", "vm", "list",
+    ]
+
+
+def test_hoist_moves_value_flag_equals_form():
+    assert cli.hoist_global_flags(["vm", "list", "--timeout=5"]) == [
+        "--timeout=5", "vm", "list",
+    ]
+
+
+def test_hoist_leaves_command_options_in_place():
+    # -o and --node are NOT global; they must stay after the subcommand.
+    assert cli.hoist_global_flags(["vm", "set", "100", "-o", "cores=4", "--node", "pve1"]) == [
+        "vm", "set", "100", "-o", "cores=4", "--node", "pve1",
+    ]
+
+
+def test_hoist_value_flag_at_end_without_value_is_kept():
+    assert cli.hoist_global_flags(["vm", "list", "--timeout"]) == ["--timeout", "vm", "list"]
+
+
+def test_hoist_stops_at_double_dash():
+    assert cli.hoist_global_flags(["vm", "list", "--", "--dangerous"]) == [
+        "vm", "list", "--", "--dangerous",
+    ]
+
+
+def test_hoist_noop_when_no_globals():
+    assert cli.hoist_global_flags(["vm", "list"]) == ["vm", "list"]
+
+
 def test_main_invokes_app(monkeypatch):
-    called = {}
-    monkeypatch.setattr(cli, "app", lambda: called.setdefault("ran", True))
+    captured = {}
+    monkeypatch.setattr(cli, "app", lambda **kw: captured.update(kw) or captured.setdefault("ran", True))
+    monkeypatch.setattr(cli.sys, "argv", ["pmox", "vm", "list", "--json"])
     cli.main()
-    assert called["ran"] is True
+    assert captured["ran"] is True
+    assert captured["args"] == ["--json", "vm", "list"]
 
 
 def test_callback_config_error_exit2(monkeypatch):
