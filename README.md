@@ -182,3 +182,7 @@ pmox/
 
 Each module has one job and a clear interface, which is what makes the whole
 thing straightforward to test with mocks.
+
+## License
+
+[MIT](LICENSE) © 2026 Luke Ward
