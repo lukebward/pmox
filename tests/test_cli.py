@@ -7,6 +7,7 @@ These exercise every command plus the two-tier safety model end to end:
 """
 
 import json
+import re
 
 import pytest
 from typer.testing import CliRunner
@@ -18,6 +19,16 @@ runner = CliRunner()
 
 def inv(args, creds, **kwargs):
     return runner.invoke(cli.app, args, env=creds, **kwargs)
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def plain(text):
+    """Strip ANSI SGR color codes so output assertions are stable regardless of
+    the ambient color environment. CI commonly sets FORCE_COLOR, which makes Rich
+    emit color even when stdout is captured (not a TTY)."""
+    return _ANSI_RE.sub("", text)
 
 
 # ---------------------------------------------------------------- read-only --
@@ -464,6 +475,6 @@ def test_ok_human_envelope(fake_client, creds):
     fake_client.guest_power.return_value = "UPID:task"
     r = inv(["--no-json", "--dangerous", "vm", "start", "100"], creds)
     assert r.exit_code == 0, r.output
-    assert "Start: vm 100 on pve1" in r.output
+    assert "Start: vm 100 on pve1" in plain(r.output)
     with pytest.raises(json.JSONDecodeError):
         json.loads(r.output)

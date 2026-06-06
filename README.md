@@ -35,6 +35,14 @@ When running non-interactively (e.g. an AI calling the CLI), a destructive op
 
 ## Install
 
+From [PyPI](https://pypi.org/project/pmox/):
+
+```bash
+pip install pmox
+```
+
+Or install from source (editable), e.g. for development:
+
 **macOS / Linux**
 
 ```bash
@@ -155,7 +163,7 @@ drive `pmox` for you with the safety gates intact:
 
 It adds a `proxmox` skill (auto-activates when you ask about your cluster) plus
 `/pmox:cluster-status`, `/pmox:list-guests`, and `/pmox:run`. Install the CLI
-first (`pipx install .`). See [`plugin/README.md`](plugin/README.md).
+first (`pipx install pmox`). See [`plugin/README.md`](plugin/README.md).
 
 ## Development & tests
 
