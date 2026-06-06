@@ -4,10 +4,12 @@ Command groups: ``nodes``, ``vm``, ``ct``, ``storage``, ``cluster``, ``task``
 (with a nested ``snapshot`` group under ``vm``/``ct``), plus a top-level
 ``version``.
 
-Global options live on the root callback and must precede the subcommand, e.g.::
+Global options are position-independent — pmox lifts them before parsing, so
+both of these work::
 
+    pmox vm list --json
     pmox --json vm list
-    pmox --host 10.0.0.2 nodes list
+    pmox nodes list --host 10.0.0.2
 
 Output format auto-detects: when stdout is piped or captured (e.g. an AI driving
 the CLI) pmox emits JSON; at an interactive terminal it prints tables. Override
@@ -43,6 +45,8 @@ from .output import (
 from .safety import ConfirmationRequired, DangerousNotEnabled, confirm, require_dangerous
 
 # Global flags accepted in any position (hoisted to the front before Typer parses).
+# --wait/--no-wait/--dry-run are not yet wired into the callback; they are listed
+# here so the shim handles them correctly from this first commit (Task 2 will register them).
 _GLOBAL_BOOL_FLAGS = frozenset(
     {
         "--json",

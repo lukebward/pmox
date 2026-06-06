@@ -408,6 +408,12 @@ def test_hoist_noop_when_no_globals():
     assert cli.hoist_global_flags(["vm", "list"]) == ["vm", "list"]
 
 
+def test_hoist_multiple_interleaved_flags():
+    assert cli.hoist_global_flags(["vm", "list", "--json", "--timeout", "30"]) == [
+        "--json", "--timeout", "30", "vm", "list",
+    ]
+
+
 def test_main_invokes_app(monkeypatch):
     captured = {}
     monkeypatch.setattr(cli, "app", lambda **kw: captured.update(kw) or captured.setdefault("ran", True))
