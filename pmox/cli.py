@@ -474,13 +474,19 @@ def _make_power_command(group, kind, label, action, destructive, description):
     @group.command(action, help=f"{description} a {label}.")
     def _cmd(ctx: typer.Context, vmid: int = vmid_arg, node: Optional[str] = node_opt, yes: bool = yes_opt):
         with error_boundary(ctx.obj.json):
-            _require_dangerous(ctx)
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, vmid)
-            if destructive:
-                confirm(f"{action} {label.lower()} {vmid} on {resolved}", assume_yes=yes)
-            result = client.guest_power(resolved, kind, vmid, action)
-            _ok(ctx, f"{description}: {label.lower()} {vmid} on {resolved}", result)
+            _execute(
+                ctx,
+                op=f"{kind}.{action}",
+                message=f"{description}: {label.lower()} {vmid} on {resolved}",
+                node=resolved,
+                call=lambda: client.guest_power(resolved, kind, vmid, action),
+                params={"vmid": vmid, "action": action},
+                destructive=destructive,
+                yes=yes,
+                confirm_msg=f"{action} {label.lower()} {vmid} on {resolved}",
+            )
 
     return _cmd
 

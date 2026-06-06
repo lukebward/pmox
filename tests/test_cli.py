@@ -662,3 +662,26 @@ def test_execute_waits_when_requested(monkeypatch):
     monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
     result = cli._execute(ctx, op="vm.start", message="m", node="pve1", call=lambda: "UPID:x")
     assert result == {"status": "stopped", "exitstatus": "OK"}
+
+
+# ------------------------------------------------- Task 6: power via _execute --
+
+
+def test_power_dry_run_skips_call(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["--dry-run", "vm", "start", "100"], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["dry_run"] is True and payload["op"] == "qemu.start"
+    fake_client.guest_power.assert_not_called()
+
+
+def test_power_wait_reports_task(fake_client, creds, monkeypatch):
+    fake_client.resolve_node.return_value = "pve1"
+    fake_client.guest_power.return_value = "UPID:pve1:start"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    r = inv(["--json", "--dangerous", "--wait", "vm", "start", "100"], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["result"]["exitstatus"] == "OK"
