@@ -567,3 +567,40 @@ def test_maybe_wait_times_out(monkeypatch):
     monkeypatch.setattr(cli.time, "monotonic", iter([0.0, 1.0, 999.0]).__next__)
     with pytest.raises(TimeoutError):
         cli._maybe_wait(ctx, "pve1", "UPID:pve1:0001")
+
+
+def test_error_json_envelope_readonly(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["--json", "vm", "start", "100"], creds)
+    assert r.exit_code == 4, r.output
+    payload = json.loads(r.output)
+    assert payload == {
+        "ok": False,
+        "error": "read_only",
+        "message": payload["message"],
+        "need": ["--dangerous"],
+    }
+
+
+def test_error_json_envelope_confirm(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["--json", "--dangerous", "vm", "delete", "100"], creds)
+    assert r.exit_code == 3, r.output
+    payload = json.loads(r.output)
+    assert payload["error"] == "confirm_required"
+    assert payload["need"] == ["--yes"]
+
+
+def test_error_human_readonly_still_rich(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["--no-json", "vm", "start", "100"], creds)
+    assert r.exit_code == 4, r.output
+    assert "Read-only" in plain(r.output)
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(r.output)
+
+
+def test_dry_run_emitter_shape(capsys):
+    cli._emit_dry_run("vm.start", "pve1", {"a": 1})
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"dry_run": True, "op": "vm.start", "node": "pve1", "params": {"a": 1}}

@@ -211,25 +211,42 @@ def _ok(ctx: typer.Context, message: str, result=None) -> None:
             console.print(f"  [dim]{result}[/dim]")
 
 
+def _emit_error(json_output: bool, error: str, message: str, code: int, need=None) -> None:
+    if json_output:
+        payload = {"ok": False, "error": error, "message": message}
+        if need:
+            payload["need"] = need
+        print(json.dumps(payload, default=str, indent=2))
+    else:
+        label = {
+            "read_only": ("yellow", "Read-only"),
+            "confirm_required": ("yellow", "Aborted"),
+            "config": ("red", "Config error"),
+            "error": ("red", "Error"),
+        }[error]
+        err_console.print(f"[{label[0]}]{label[1]}:[/{label[0]}] {message}")
+    raise typer.Exit(code)
+
+
+def _emit_dry_run(op: str, node, params) -> None:
+    print(json.dumps({"dry_run": True, "op": op, "node": node, "params": params or {}}, default=str, indent=2))
+
+
 @contextmanager
-def error_boundary():
+def error_boundary(json_output: bool = False):
     """Translate exceptions into friendly messages and distinct exit codes."""
     try:
         yield
     except typer.Exit:
         raise
     except DangerousNotEnabled as exc:
-        err_console.print(f"[yellow]Read-only:[/yellow] {exc}")
-        raise typer.Exit(4)
+        _emit_error(json_output, "read_only", str(exc), 4, need=["--dangerous"])
     except ConfirmationRequired as exc:
-        err_console.print(f"[yellow]Aborted:[/yellow] {exc}")
-        raise typer.Exit(3)
+        _emit_error(json_output, "confirm_required", str(exc), 3, need=["--yes"])
     except ConfigError as exc:
-        err_console.print(f"[red]Config error:[/red] {exc}")
-        raise typer.Exit(2)
+        _emit_error(json_output, "config", str(exc), 2)
     except Exception as exc:  # noqa: BLE001 - top-level CLI guard
-        err_console.print(f"[red]Error:[/red] {exc}")
-        raise typer.Exit(1)
+        _emit_error(json_output, "error", str(exc), 1)
 
 
 # ---- shared option / argument definitions ----
@@ -395,7 +412,7 @@ def main_callback(
 @app.command("version")
 def server_version(ctx: typer.Context):
     """Show the Proxmox VE version of the connected node."""
-    with error_boundary():
+    with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
         emit(client.version(), json_output=ctx.obj.json, title="Proxmox version")
 
@@ -407,7 +424,7 @@ nodes_app = typer.Typer(help="Inspect cluster nodes.", no_args_is_help=True)
 @nodes_app.command("list")
 def nodes_list(ctx: typer.Context):
     """List all nodes and their resource usage."""
-    with error_boundary():
+    with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
         emit(client.list_nodes(), columns=NODE_COLUMNS, json_output=ctx.obj.json, title="Nodes")
 
@@ -415,7 +432,7 @@ def nodes_list(ctx: typer.Context):
 @nodes_app.command("status")
 def nodes_status(ctx: typer.Context, node: str = typer.Argument(..., help="Node name.")):
     """Show detailed status for a node."""
-    with error_boundary():
+    with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
         emit(client.node_status(node), json_output=ctx.obj.json, title=f"Node {node}")
 
@@ -424,7 +441,7 @@ def nodes_status(ctx: typer.Context, node: str = typer.Argument(..., help="Node 
 def _make_power_command(group, kind, label, action, destructive, description):
     @group.command(action, help=f"{description} a {label}.")
     def _cmd(ctx: typer.Context, vmid: int = vmid_arg, node: Optional[str] = node_opt, yes: bool = yes_opt):
-        with error_boundary():
+        with error_boundary(ctx.obj.json):
             _require_dangerous(ctx)
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, vmid)
@@ -442,7 +459,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
 
     @group.command("list")
     def _list(ctx: typer.Context, node: Optional[str] = node_opt):
-        with error_boundary():
+        with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
             emit(
                 client.list_guests(kind, node=node),
@@ -453,14 +470,14 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
 
     @group.command("status")
     def _status(ctx: typer.Context, vmid: int = vmid_arg, node: Optional[str] = node_opt):
-        with error_boundary():
+        with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, vmid)
             emit(client.guest_status(resolved, kind, vmid), json_output=ctx.obj.json, title=f"{label} {vmid} status")
 
     @group.command("config")
     def _config(ctx: typer.Context, vmid: int = vmid_arg, node: Optional[str] = node_opt):
-        with error_boundary():
+        with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, vmid)
             emit(client.guest_config(resolved, kind, vmid), json_output=ctx.obj.json, title=f"{label} {vmid} config")
@@ -486,7 +503,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
             None, "--option", "-o", help="Extra API parameter key=value (repeatable)."
         ),
     ):
-        with error_boundary():
+        with error_boundary(ctx.obj.json):
             _require_dangerous(ctx)
             client = _get_client(ctx)
             params = {}
@@ -510,7 +527,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
         target: Optional[str] = typer.Option(None, "--target", help="Target node for the clone."),
         node: Optional[str] = node_opt,
     ):
-        with error_boundary():
+        with error_boundary(ctx.obj.json):
             _require_dangerous(ctx)
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, vmid)
@@ -533,7 +550,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
         node: Optional[str] = node_opt,
         yes: bool = yes_opt,
     ):
-        with error_boundary():
+        with error_boundary(ctx.obj.json):
             _require_dangerous(ctx)
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, vmid)
@@ -552,7 +569,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
         purge: bool = typer.Option(False, "--purge", help="Also remove from backup jobs / HA."),
         yes: bool = yes_opt,
     ):
-        with error_boundary():
+        with error_boundary(ctx.obj.json):
             _require_dangerous(ctx)
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, vmid)
@@ -565,7 +582,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
 
     @snap.command("list")
     def _snap_list(ctx: typer.Context, vmid: int = vmid_arg, node: Optional[str] = node_opt):
-        with error_boundary():
+        with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, vmid)
             emit(
@@ -584,7 +601,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
         vmstate: bool = typer.Option(False, "--vmstate", help="Include RAM state."),
         node: Optional[str] = node_opt,
     ):
-        with error_boundary():
+        with error_boundary(ctx.obj.json):
             _require_dangerous(ctx)
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, vmid)
@@ -604,7 +621,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
         node: Optional[str] = node_opt,
         yes: bool = yes_opt,
     ):
-        with error_boundary():
+        with error_boundary(ctx.obj.json):
             _require_dangerous(ctx)
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, vmid)
@@ -620,7 +637,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
         node: Optional[str] = node_opt,
         yes: bool = yes_opt,
     ):
-        with error_boundary():
+        with error_boundary(ctx.obj.json):
             _require_dangerous(ctx)
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, vmid)
@@ -642,7 +659,7 @@ storage_app = typer.Typer(help="Inspect storage.", no_args_is_help=True)
 
 @storage_app.command("list")
 def storage_list(ctx: typer.Context, node: Optional[str] = node_opt):
-    with error_boundary():
+    with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
         rows = client.cluster_resources(type="storage")
         if node:
@@ -656,7 +673,7 @@ def storage_content(
     storage: str = typer.Argument(..., help="Storage id."),
     node: str = typer.Option(..., "--node", "-n", help="Node name."),
 ):
-    with error_boundary():
+    with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
         emit(
             client.storage_content(node, storage),
@@ -672,7 +689,7 @@ cluster_app = typer.Typer(help="Cluster-wide views.", no_args_is_help=True)
 
 @cluster_app.command("status")
 def cluster_status(ctx: typer.Context):
-    with error_boundary():
+    with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
         data = client.cluster_status()
         if ctx.obj.json:
@@ -687,7 +704,7 @@ def cluster_resources(
     ctx: typer.Context,
     type: Optional[str] = typer.Option(None, "--type", help="Filter: vm | node | storage | sdn | pool."),
 ):
-    with error_boundary():
+    with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
         emit(
             client.cluster_resources(type=type),
@@ -707,7 +724,7 @@ def task_list(
     node: str = typer.Option(..., "--node", "-n", help="Node name."),
     limit: int = typer.Option(50, "--limit", help="Max tasks to show."),
 ):
-    with error_boundary():
+    with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
         emit(client.list_tasks(node, limit=limit), columns=TASK_COLUMNS, json_output=ctx.obj.json, title=f"{node} tasks")
 
@@ -718,7 +735,7 @@ def task_status(
     upid: str = typer.Argument(..., help="Task UPID."),
     node: str = typer.Option(..., "--node", "-n", help="Node name."),
 ):
-    with error_boundary():
+    with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
         emit(client.task_status(node, upid), json_output=ctx.obj.json, title="Task status")
 
@@ -729,7 +746,7 @@ def task_log(
     upid: str = typer.Argument(..., help="Task UPID."),
     node: str = typer.Option(..., "--node", "-n", help="Node name."),
 ):
-    with error_boundary():
+    with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
         data = client.task_log(node, upid)
         if ctx.obj.json:
