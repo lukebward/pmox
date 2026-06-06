@@ -597,7 +597,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 message=f"Resize {label.lower()} {vmid} disk {disk} to {size}",
                 node=resolved,
                 call=lambda: client.resize_disk(resolved, kind, vmid, disk, size),
-                params={"disk": disk, "size": size},
+                params={"vmid": vmid, "disk": disk, "size": size},
             )
 
     @group.command("rename", help=f"Rename a {label}.")
@@ -617,7 +617,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 message=f"Rename {label.lower()} {vmid} to {newname}",
                 node=resolved,
                 call=lambda: client.update_config(resolved, kind, vmid, **{key: newname}),
-                params={key: newname},
+                params={"vmid": vmid, key: newname},
             )
 
     @group.command("tag", help=f"Add/remove/set tags on a {label}.")
@@ -640,7 +640,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 message=f"Set tags on {label.lower()} {vmid}: {new_tags!r}",
                 node=resolved,
                 call=lambda: client.update_config(resolved, kind, vmid, tags=new_tags),
-                params={"tags": new_tags},
+                params={"vmid": vmid, "tags": new_tags},
             )
 
     for action, destructive, description in [
