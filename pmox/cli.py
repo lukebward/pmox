@@ -137,10 +137,21 @@ def resolve_json_output(flag: Optional[bool], env_value: Optional[str], stdout_i
 
 
 class State:
-    def __init__(self, settings: Settings, json_output: bool = False, dangerous: bool = False):
+    def __init__(
+        self,
+        settings: Settings,
+        json_output: bool = False,
+        dangerous: bool = False,
+        wait: bool = False,
+        timeout: int = 600,
+        dry_run: bool = False,
+    ):
         self.settings = settings
         self.json = json_output
         self.dangerous = dangerous
+        self.wait = wait
+        self.timeout = timeout
+        self.dry_run = dry_run
         self.client: Optional[ProxmoxClient] = None
 
 
@@ -308,6 +319,13 @@ def main_callback(
     dangerous: bool = typer.Option(
         False, "--dangerous", help="Enable dangerous (write/management) mode. Default is read-only (safe for AI exploration)."
     ),
+    wait: bool = typer.Option(
+        False, "--wait/--no-wait", help="Wait for the resulting task to finish and report its outcome."
+    ),
+    timeout: int = typer.Option(600, "--timeout", help="Seconds to wait when --wait is set (default 600)."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print the intended API call as JSON and exit without changing anything."
+    ),
     host: Optional[str] = typer.Option(None, "--host", help="Proxmox host or IP."),
     port: Optional[int] = typer.Option(None, "--port", help="API port (default 8006)."),
     token_id: Optional[str] = typer.Option(None, "--token-id", help="API token id: user@realm!tokenname."),
@@ -342,7 +360,14 @@ def main_callback(
 
     json_on = resolve_json_output(json_output, os.environ.get("PMOX_JSON"), _stream_isatty(sys.stdout))
     dangerous_on = dangerous or _parse_bool(os.environ.get("PMOX_DANGEROUS"))
-    ctx.obj = State(settings=settings, json_output=json_on, dangerous=dangerous_on)
+    ctx.obj = State(
+        settings=settings,
+        json_output=json_on,
+        dangerous=dangerous_on,
+        wait=wait,
+        timeout=timeout,
+        dry_run=dry_run,
+    )
 
 
 @app.command("version")

@@ -525,3 +525,10 @@ def test_ok_human_envelope(fake_client, creds):
     assert "Start: vm 100 on pve1" in plain(r.output)
     with pytest.raises(json.JSONDecodeError):
         json.loads(r.output)
+
+
+def test_global_flags_parse_without_error(fake_client, creds):
+    # --wait/--timeout/--dry-run are accepted on the root callback (before subcommand).
+    fake_client.list_nodes.return_value = []
+    r = inv(["--wait", "--timeout", "5", "--dry-run", "nodes", "list"], creds)
+    assert r.exit_code == 0, r.output
