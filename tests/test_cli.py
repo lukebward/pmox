@@ -781,3 +781,30 @@ def test_rename_ct_sets_hostname(fake_client, creds):
     r = inv(["--dangerous", "ct", "rename", "200", "box01"], creds)
     assert r.exit_code == 0, r.output
     fake_client.update_config.assert_called_once_with("pve1", "lxc", 200, hostname="box01")
+
+
+# ------------------------------------------------- Task 13: merge_tags + tag command --
+
+
+def test_merge_tags_set_replaces():
+    assert cli.merge_tags("a;b", set_="x,y") == "x;y"
+
+
+def test_merge_tags_add_and_remove():
+    assert cli.merge_tags("a;b", add="c", remove="a") == "b;c"
+
+
+def test_merge_tags_add_is_idempotent():
+    assert cli.merge_tags("a;b", add="b") == "a;b"
+
+
+def test_merge_tags_empty():
+    assert cli.merge_tags("", add="a") == "a"
+
+
+def test_tag_reads_then_writes(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    fake_client.guest_config.return_value = {"tags": "prod"}
+    r = inv(["--dangerous", "vm", "tag", "100", "--add", "k3s"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.update_config.assert_called_once_with("pve1", "qemu", 100, tags="prod;k3s")

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from contextlib import contextmanager
@@ -243,6 +244,25 @@ def parse_options(items: Optional[List[str]]) -> dict:
         key, value = item.split("=", 1)
         params[key] = value
     return params
+
+
+def _split_tags(value: Optional[str]) -> List[str]:
+    return [t for t in re.split(r"[;,]", value or "") if t]
+
+
+def merge_tags(current: str, add: Optional[str] = None, remove: Optional[str] = None, set_: Optional[str] = None) -> str:
+    """Compute a new Proxmox ``tags`` string. ``set_`` replaces; otherwise add/remove."""
+    if set_ is not None:
+        tags = _split_tags(set_)
+    else:
+        tags = _split_tags(current)
+        for t in _split_tags(add):
+            if t not in tags:
+                tags.append(t)
+        for t in _split_tags(remove):
+            if t in tags:
+                tags.remove(t)
+    return ";".join(tags)
 
 
 def _ok(ctx: typer.Context, message: str, result=None) -> None:
@@ -598,6 +618,29 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 node=resolved,
                 call=lambda: client.update_config(resolved, kind, vmid, **{key: newname}),
                 params={key: newname},
+            )
+
+    @group.command("tag", help=f"Add/remove/set tags on a {label}.")
+    def _tag(
+        ctx: typer.Context,
+        vmid: int = vmid_arg,
+        add: Optional[str] = typer.Option(None, "--add", help="Comma-separated tags to add."),
+        remove: Optional[str] = typer.Option(None, "--remove", help="Comma-separated tags to remove."),
+        set_: Optional[str] = typer.Option(None, "--set", help="Comma-separated tags to set (replaces all)."),
+        node: Optional[str] = node_opt,
+    ):
+        with error_boundary(ctx.obj.json):
+            client = _get_client(ctx)
+            resolved = node or _resolve_node_or_die(client, vmid)
+            current = client.guest_config(resolved, kind, vmid).get("tags", "")
+            new_tags = merge_tags(current, add=add, remove=remove, set_=set_)
+            _execute(
+                ctx,
+                op=f"{kind}.tag",
+                message=f"Set tags on {label.lower()} {vmid}: {new_tags!r}",
+                node=resolved,
+                call=lambda: client.update_config(resolved, kind, vmid, tags=new_tags),
+                params={"tags": new_tags},
             )
 
     for action, destructive, description in [
