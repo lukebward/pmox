@@ -35,14 +35,23 @@ When running non-interactively (e.g. an AI calling the CLI), a destructive op
 
 ## Install
 
+**macOS / Linux**
+
 ```bash
+git clone https://github.com/lukebward/pmox.git
+cd pmox
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+**Windows (PowerShell)**
+
+```powershell
+git clone https://github.com/lukebward/pmox.git
 cd pmox
 python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS/Linux
-source .venv/bin/activate
-
+.venv\Scripts\Activate.ps1
 pip install -e .
 ```
 
