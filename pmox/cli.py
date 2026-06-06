@@ -581,7 +581,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 message=f"Cloning {label.lower()} {vmid} → {newid}",
                 node=resolved,
                 call=lambda: client.clone_guest(resolved, kind, vmid, newid, **params),
-                params={"newid": newid, **params},
+                params={"vmid": vmid, "newid": newid, **params},
             )
 
     @group.command("migrate")
@@ -605,7 +605,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 message=f"Migrating {label.lower()} {vmid} → {target}",
                 node=resolved,
                 call=lambda: client.migrate_guest(resolved, kind, vmid, target, **params),
-                params={"target": target, **params},
+                params={"vmid": vmid, "target": target, **params},
                 destructive=True,
                 yes=yes,
                 confirm_msg=f"migrate {label.lower()} {vmid} from {resolved} to {target}",
@@ -672,7 +672,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 message=f"Creating snapshot {name!r} of {label.lower()} {vmid}",
                 node=resolved,
                 call=lambda: client.create_snapshot(resolved, kind, vmid, name, **params),
-                params={"snapname": name, **params},
+                params={"vmid": vmid, "snapname": name, **params},
             )
 
     @snap.command("delete")
@@ -692,7 +692,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 message=f"Deleted snapshot {name!r} of {label.lower()} {vmid}",
                 node=resolved,
                 call=lambda: client.delete_snapshot(resolved, kind, vmid, name),
-                params={"snapname": name},
+                params={"vmid": vmid, "snapname": name},
                 destructive=True,
                 yes=yes,
                 confirm_msg=f"delete snapshot {name!r} of {label.lower()} {vmid}",
@@ -715,7 +715,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 message=f"Rolling back {label.lower()} {vmid} → {name!r}",
                 node=resolved,
                 call=lambda: client.rollback_snapshot(resolved, kind, vmid, name),
-                params={"snapname": name},
+                params={"vmid": vmid, "snapname": name},
                 destructive=True,
                 yes=yes,
                 confirm_msg=f"ROLLBACK {label.lower()} {vmid} to snapshot {name!r} (loses current state)",

@@ -695,4 +695,5 @@ def test_delete_dry_run_skips_call(fake_client, creds):
     r = inv(["--dry-run", "vm", "delete", "100"], creds)
     assert r.exit_code == 0, r.output
     assert json.loads(r.output)["op"] == "qemu.delete"
+    assert json.loads(r.output)["dry_run"] is True
     fake_client.delete_guest.assert_not_called()
