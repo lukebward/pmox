@@ -8,6 +8,8 @@ These exercise every command plus the two-tier safety model end to end:
 
 import json
 import re
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from typer.testing import CliRunner
@@ -532,3 +534,36 @@ def test_global_flags_parse_without_error(fake_client, creds):
     fake_client.list_nodes.return_value = []
     r = inv(["--wait", "--timeout", "5", "--dry-run", "nodes", "list"], creds)
     assert r.exit_code == 0, r.output
+
+
+def test_maybe_wait_passes_through_non_upid():
+    state = cli.State(settings=None)
+    ctx = SimpleNamespace(obj=state)
+    assert cli._maybe_wait(ctx, "pve1", {"already": "done"}) == {"already": "done"}
+
+
+def test_maybe_wait_polls_until_stopped(monkeypatch):
+    client = MagicMock()
+    client.task_status.side_effect = [
+        {"status": "running"},
+        {"status": "stopped", "exitstatus": "OK"},
+    ]
+    state = cli.State(settings=None)
+    state.client = client
+    ctx = SimpleNamespace(obj=state)
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    result = cli._maybe_wait(ctx, "pve1", "UPID:pve1:0001")
+    assert result == {"status": "stopped", "exitstatus": "OK"}
+    assert client.task_status.call_count == 2
+
+
+def test_maybe_wait_times_out(monkeypatch):
+    client = MagicMock()
+    client.task_status.return_value = {"status": "running"}
+    state = cli.State(settings=None, timeout=10)
+    state.client = client
+    ctx = SimpleNamespace(obj=state)
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(cli.time, "monotonic", iter([0.0, 1.0, 999.0]).__next__)
+    with pytest.raises(TimeoutError):
+        cli._maybe_wait(ctx, "pve1", "UPID:pve1:0001")

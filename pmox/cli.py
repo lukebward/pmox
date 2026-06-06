@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import List, Optional
@@ -45,8 +46,7 @@ from .output import (
 from .safety import ConfirmationRequired, DangerousNotEnabled, confirm, require_dangerous
 
 # Global flags accepted in any position (hoisted to the front before Typer parses).
-# --wait/--no-wait/--dry-run are not yet wired into the callback; they are listed
-# here so the shim handles them correctly from this first commit (Task 2 will register them).
+# These global flags are registered on main_callback below; listed here so the hoist shim handles them too.
 _GLOBAL_BOOL_FLAGS = frozenset(
     {
         "--json",
@@ -177,6 +177,28 @@ def _resolve_node_or_die(client: ProxmoxClient, vmid: int) -> str:
         )
         raise typer.Exit(1)
     return node
+
+
+_POLL_SECONDS = 2
+
+
+def _maybe_wait(ctx: typer.Context, node: str, result):
+    """If ``result`` is a task UPID and --wait is set, poll until the task finishes.
+
+    Returns the final task-status dict, or the original ``result`` if it is not a
+    UPID. Raises ``TimeoutError`` if the task does not finish within --timeout.
+    """
+    if not (isinstance(result, str) and result.startswith("UPID:")):
+        return result
+    client = _get_client(ctx)
+    deadline = time.monotonic() + ctx.obj.timeout
+    while True:
+        status = client.task_status(node, result)
+        if status.get("status") == "stopped":
+            return status
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Task {result} did not finish within {ctx.obj.timeout}s.")
+        time.sleep(_POLL_SECONDS)
 
 
 def _ok(ctx: typer.Context, message: str, result=None) -> None:
