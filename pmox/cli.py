@@ -201,6 +201,38 @@ def _maybe_wait(ctx: typer.Context, node: str, result):
         time.sleep(_POLL_SECONDS)
 
 
+def _execute(
+    ctx: typer.Context,
+    *,
+    op: str,
+    message: str,
+    node,
+    call,
+    params=None,
+    destructive: bool = False,
+    yes: bool = False,
+    confirm_msg: Optional[str] = None,
+):
+    """Run a single state-changing operation through the full safety lifecycle.
+
+    Order: dry-run preview (no gates) → require --dangerous → confirm if
+    destructive → run ``call`` → optionally wait on the task → emit the ok
+    envelope. ``call`` is a zero-arg callable returning the client result.
+    """
+    state: State = ctx.obj
+    if state.dry_run:
+        _emit_dry_run(op, node, params)
+        return None
+    require_dangerous(state.dangerous)
+    if destructive:
+        confirm(confirm_msg or message, assume_yes=yes)
+    result = call()
+    if state.wait:
+        result = _maybe_wait(ctx, node, result)
+    _ok(ctx, message, result)
+    return result
+
+
 def _ok(ctx: typer.Context, message: str, result=None) -> None:
     state: State = ctx.obj
     if state.json:

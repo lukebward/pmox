@@ -604,3 +604,61 @@ def test_dry_run_emitter_shape(capsys):
     cli._emit_dry_run("vm.start", "pve1", {"a": 1})
     out = json.loads(capsys.readouterr().out)
     assert out == {"dry_run": True, "op": "vm.start", "node": "pve1", "params": {"a": 1}}
+
+
+# ---------------------------------------------------------- _execute helper ---
+
+
+def _exec_ctx(**overrides):
+    state = cli.State(settings=None)
+    for k, v in overrides.items():
+        setattr(state, k, v)
+    return SimpleNamespace(obj=state)
+
+
+def test_execute_dry_run_prints_plan_and_skips_call(capsys):
+    ctx = _exec_ctx(json=True, dangerous=False, dry_run=True)
+    called = {"ran": False}
+    cli._execute(
+        ctx, op="vm.set", message="Set VM 100", node="pve1",
+        call=lambda: called.__setitem__("ran", True), params={"cores": "4"},
+    )
+    assert called["ran"] is False
+    out = json.loads(capsys.readouterr().out)
+    assert out["dry_run"] is True and out["op"] == "vm.set" and out["params"] == {"cores": "4"}
+
+
+def test_execute_runs_call_and_emits_ok(capsys):
+    ctx = _exec_ctx(json=True, dangerous=True)
+    result = cli._execute(
+        ctx, op="vm.set", message="Set VM 100", node="pve1",
+        call=lambda: "UPID:done", params={"cores": "4"},
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True and payload["result"] == "UPID:done"
+    assert result == "UPID:done"
+
+
+def test_execute_blocks_when_not_dangerous():
+    ctx = _exec_ctx(json=True, dangerous=False)
+    with pytest.raises(cli.DangerousNotEnabled):
+        cli._execute(ctx, op="vm.set", message="m", node="pve1", call=lambda: "x")
+
+
+def test_execute_destructive_requires_yes():
+    ctx = _exec_ctx(json=True, dangerous=True)
+    with pytest.raises(cli.ConfirmationRequired):
+        cli._execute(
+            ctx, op="vm.delete", message="m", node="pve1",
+            call=lambda: "x", destructive=True, yes=False, confirm_msg="delete 100",
+        )
+
+
+def test_execute_waits_when_requested(monkeypatch):
+    client = MagicMock()
+    client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    ctx = _exec_ctx(json=True, dangerous=True, wait=True)
+    ctx.obj.client = client
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    result = cli._execute(ctx, op="vm.start", message="m", node="pve1", call=lambda: "UPID:x")
+    assert result == {"status": "stopped", "exitstatus": "OK"}
