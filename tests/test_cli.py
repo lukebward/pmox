@@ -747,3 +747,20 @@ def test_set_delete_needs_yes(fake_client, creds):
     r2 = inv(["--dangerous", "vm", "set", "100", "-o", "delete=net1", "--yes"], creds)
     assert r2.exit_code == 0, r2.output
     fake_client.update_config.assert_called_once_with("pve1", "qemu", 100, delete="net1")
+
+
+# ------------------------------------------------- Task 11: resize command --
+
+
+def test_resize_grows_disk(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["--dangerous", "vm", "resize", "100", "--disk", "scsi0", "--size", "+10G"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.resize_disk.assert_called_once_with("pve1", "qemu", 100, "scsi0", "+10G")
+
+
+def test_resize_needs_dangerous(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["vm", "resize", "100", "--disk", "scsi0", "--size", "+10G"], creds)
+    assert r.exit_code == 4, r.output
+    fake_client.resize_disk.assert_not_called()

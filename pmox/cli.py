@@ -560,6 +560,26 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 confirm_msg=f"set {label.lower()} {vmid}: remove {params.get('delete')}",
             )
 
+    @group.command("resize", help=f"Grow a disk of a {label} (grow-only).")
+    def _resize(
+        ctx: typer.Context,
+        vmid: int = vmid_arg,
+        disk: str = typer.Option(..., "--disk", help="Disk to grow, e.g. scsi0."),
+        size: str = typer.Option(..., "--size", help="+10G (grow by) or 50G (grow to)."),
+        node: Optional[str] = node_opt,
+    ):
+        with error_boundary(ctx.obj.json):
+            client = _get_client(ctx)
+            resolved = node or _resolve_node_or_die(client, vmid)
+            _execute(
+                ctx,
+                op=f"{kind}.resize",
+                message=f"Resize {label.lower()} {vmid} disk {disk} to {size}",
+                node=resolved,
+                call=lambda: client.resize_disk(resolved, kind, vmid, disk, size),
+                params={"disk": disk, "size": size},
+            )
+
     for action, destructive, description in [
         ("start", False, "Start"),
         ("shutdown", False, "Gracefully shut down"),
