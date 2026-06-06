@@ -764,3 +764,20 @@ def test_resize_needs_dangerous(fake_client, creds):
     r = inv(["vm", "resize", "100", "--disk", "scsi0", "--size", "+10G"], creds)
     assert r.exit_code == 4, r.output
     fake_client.resize_disk.assert_not_called()
+
+
+# ------------------------------------------------- Task 12: rename command --
+
+
+def test_rename_vm_sets_name(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["--dangerous", "vm", "rename", "100", "web01"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.update_config.assert_called_once_with("pve1", "qemu", 100, name="web01")
+
+
+def test_rename_ct_sets_hostname(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["--dangerous", "ct", "rename", "200", "box01"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.update_config.assert_called_once_with("pve1", "lxc", 200, hostname="box01")

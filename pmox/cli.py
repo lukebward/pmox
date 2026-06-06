@@ -580,6 +580,26 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 params={"disk": disk, "size": size},
             )
 
+    @group.command("rename", help=f"Rename a {label}.")
+    def _rename(
+        ctx: typer.Context,
+        vmid: int = vmid_arg,
+        newname: str = typer.Argument(..., help="New name (VM) / hostname (CT)."),
+        node: Optional[str] = node_opt,
+    ):
+        with error_boundary(ctx.obj.json):
+            client = _get_client(ctx)
+            resolved = node or _resolve_node_or_die(client, vmid)
+            key = "name" if kind == "qemu" else "hostname"
+            _execute(
+                ctx,
+                op=f"{kind}.rename",
+                message=f"Rename {label.lower()} {vmid} to {newname}",
+                node=resolved,
+                call=lambda: client.update_config(resolved, kind, vmid, **{key: newname}),
+                params={key: newname},
+            )
+
     for action, destructive, description in [
         ("start", False, "Start"),
         ("shutdown", False, "Gracefully shut down"),
