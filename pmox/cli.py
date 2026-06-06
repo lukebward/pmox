@@ -43,7 +43,13 @@ from .output import (
     percent,
     status_fmt,
 )
-from .safety import ConfirmationRequired, DangerousNotEnabled, confirm, require_dangerous
+from .safety import (
+    ConfirmationRequired,
+    DangerousNotEnabled,
+    confirm,
+    require_dangerous,
+    set_requires_confirmation,
+)
 
 # Global flags accepted in any position (hoisted to the front before Typer parses).
 # These global flags are registered on main_callback below; listed here so the hoist shim handles them too.
@@ -525,6 +531,35 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, vmid)
             emit(client.guest_config(resolved, kind, vmid), json_output=ctx.obj.json, title=f"{label} {vmid} config")
+
+    @group.command("set")
+    def _set(
+        ctx: typer.Context,
+        vmid: int = vmid_arg,
+        option: Optional[List[str]] = typer.Option(
+            None, "--option", "-o", help="Config key=value to set (repeatable). Use delete=dev to remove (needs --yes)."
+        ),
+        node: Optional[str] = node_opt,
+        yes: bool = yes_opt,
+    ):
+        """Update configuration of a {label} (cores, memory, disks, nics, tags, …)."""
+        with error_boundary(ctx.obj.json):
+            client = _get_client(ctx)
+            params = parse_options(option)
+            if not params:
+                raise ValueError("set needs at least one -o key=value.")
+            resolved = node or _resolve_node_or_die(client, vmid)
+            _execute(
+                ctx,
+                op=f"{kind}.set",
+                message=f"Set {label.lower()} {vmid} on {resolved}",
+                node=resolved,
+                call=lambda: client.update_config(resolved, kind, vmid, **params),
+                params=params,
+                destructive=set_requires_confirmation(params),
+                yes=yes,
+                confirm_msg=f"set {label.lower()} {vmid}: remove {params.get('delete')}",
+            )
 
     for action, destructive, description in [
         ("start", False, "Start"),

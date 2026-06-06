@@ -55,6 +55,11 @@ def stdin_is_tty() -> bool:
         return False
 
 
+def set_requires_confirmation(params: dict) -> bool:
+    """A config update that removes a device (``delete=``) is destructive."""
+    return "delete" in params
+
+
 def confirm(
     action: str,
     assume_yes: bool = False,

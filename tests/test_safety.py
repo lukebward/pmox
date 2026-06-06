@@ -42,3 +42,9 @@ def test_require_dangerous_blocks_when_disabled():
 
 def test_require_dangerous_allows_when_enabled():
     require_dangerous(True)  # must not raise
+
+
+def test_set_requires_confirmation():
+    from pmox.safety import set_requires_confirmation
+    assert set_requires_confirmation({"cores": "4"}) is False
+    assert set_requires_confirmation({"delete": "net1"}) is True

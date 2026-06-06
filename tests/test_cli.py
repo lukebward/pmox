@@ -713,3 +713,37 @@ def test_parse_options_empty():
 def test_parse_options_rejects_no_equals():
     with pytest.raises(ValueError):
         cli.parse_options(["noequals"])
+
+
+# ------------------------------------------------- Task 10: set command + delete-guard --
+
+
+def test_set_updates_config(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["--dangerous", "vm", "set", "100", "-o", "cores=4", "-o", "memory=4096"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.update_config.assert_called_once_with("pve1", "qemu", 100, cores="4", memory="4096")
+
+
+def test_set_needs_dangerous(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["vm", "set", "100", "-o", "cores=4"], creds)
+    assert r.exit_code == 4, r.output
+    fake_client.update_config.assert_not_called()
+
+
+def test_set_requires_at_least_one_option(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["--dangerous", "vm", "set", "100"], creds)
+    assert r.exit_code == 1, r.output
+
+
+def test_set_delete_needs_yes(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["--dangerous", "vm", "set", "100", "-o", "delete=net1"], creds)
+    assert r.exit_code == 3, r.output
+    fake_client.update_config.assert_not_called()
+
+    r2 = inv(["--dangerous", "vm", "set", "100", "-o", "delete=net1", "--yes"], creds)
+    assert r2.exit_code == 0, r2.output
+    fake_client.update_config.assert_called_once_with("pve1", "qemu", 100, delete="net1")
