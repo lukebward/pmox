@@ -1421,3 +1421,134 @@ def test_image_pull_ct_dry_run(fake_client, creds):
 def test_image_pull_ct_and_as_template_exclusive(fake_client, creds):
     r = inv(["--dangerous", "image", "pull", "ubuntu-24.04", "--ct", "--as-template", "--storage", "local", "--node", "pve1"], creds)
     assert r.exit_code == 1, r.output
+
+
+# --- vm up command ---
+
+
+def _net_creds(creds):
+    return {**creds, "PROXMOX_NET_CIDR": "192.168.0.0/24",
+            "PROXMOX_NET_GATEWAY": "192.168.0.1",
+            "PROXMOX_NET_POOL": "192.168.0.200-192.168.0.250"}
+
+
+def test_vm_up_allocates_ip_and_creates(fake_client, creds, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("ssh-ed25519 AAAA u@h")
+    fake_client.cluster_nextid.return_value = "150"
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.cluster_resources.return_value = []
+    fake_client.storage_content.return_value = []
+    fake_client.download_url.return_value = "UPID:dl"
+    fake_client.create_guest.return_value = "UPID:create"
+    fake_client.guest_power.return_value = "UPID:start"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+             "--ssh-key", str(key), "--ciuser", "ubuntu"], _net_creds(creds))
+    assert r.exit_code == 0, r.output
+    create = fake_client.create_guest.call_args.kwargs
+    assert create["ipconfig0"] == "ip=192.168.0.200/24,gw=192.168.0.1"
+    assert "import-from=local:import/noble-server-cloudimg-amd64.qcow2" in create["scsi0"]
+    assert create["ide2"] == "local-lvm:cloudinit"
+    assert "192.168.0.200" in r.output and "ssh ubuntu@192.168.0.200" in r.output
+
+
+def test_vm_up_json_output(fake_client, creds, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("ssh-ed25519 AAAA u@h")
+    fake_client.cluster_nextid.return_value = "150"
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.cluster_resources.return_value = []
+    fake_client.storage_content.return_value = []
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--json", "--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+             "--ssh-key", str(key), "--ciuser", "ubuntu"], _net_creds(creds))
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.output)
+    assert out["ip"] == "192.168.0.200"
+    assert out["ssh"] == "ssh ubuntu@192.168.0.200"
+
+
+def test_vm_up_explicit_ip_skips_allocation(fake_client, creds, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("ssh-ed25519 AAAA u@h")
+    fake_client.cluster_nextid.return_value = "150"
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.storage_content.return_value = []
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+             "--ip", "192.168.0.77/24,gw=192.168.0.1", "--ssh-key", str(key)], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.cluster_resources.assert_not_called()
+    assert fake_client.create_guest.call_args.kwargs["ipconfig0"] == "ip=192.168.0.77/24,gw=192.168.0.1"
+    assert "192.168.0.77" in r.output and "image's default user" in r.output
+
+
+def test_vm_up_no_pool_configured_errors(fake_client, creds, tmp_path):
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("ssh-ed25519 AAAA u@h")
+    fake_client.cluster_nextid.return_value = "150"
+    r = inv(["--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+             "--ssh-key", str(key)], creds)
+    assert r.exit_code == 1, r.output
+    fake_client.create_guest.assert_not_called()
+
+
+def test_vm_up_dry_run(fake_client, creds, tmp_path):
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("ssh-ed25519 AAAA u@h")
+    fake_client.cluster_nextid.return_value = "150"
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.cluster_resources.return_value = []
+    fake_client.storage_content.return_value = []
+    r = inv(["--dry-run", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+             "--ssh-key", str(key)], _net_creds(creds))
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["op"] == "qemu.up"
+    fake_client.create_guest.assert_not_called()
+
+
+def test_vm_up_needs_dangerous(fake_client, creds, tmp_path):
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("ssh-ed25519 AAAA u@h")
+    fake_client.cluster_nextid.return_value = "150"
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.cluster_resources.return_value = []
+    fake_client.storage_content.return_value = []
+    r = inv(["vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+             "--ssh-key", str(key)], _net_creds(creds))
+    assert r.exit_code == 4, r.output
+    fake_client.create_guest.assert_not_called()
+
+
+def test_vm_up_no_ssh_key(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.cluster_nextid.return_value = "150"
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.cluster_resources.return_value = []
+    fake_client.storage_content.return_value = []
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+             "--no-ssh-key", "--ciuser", "ubuntu"], _net_creds(creds))
+    assert r.exit_code == 0, r.output
+    assert "sshkeys" not in fake_client.create_guest.call_args.kwargs
+
+
+def test_vm_up_human_output(fake_client, creds, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("ssh-ed25519 AAAA u@h")
+    fake_client.cluster_nextid.return_value = "150"
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.cluster_resources.return_value = []
+    fake_client.storage_content.return_value = []
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--no-json", "--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+             "--ssh-key", str(key), "--ciuser", "ubuntu"], _net_creds(creds))
+    assert r.exit_code == 0, r.output
+    out = plain(r.output)
+    assert "192.168.0.200" in out
+    assert "ssh ubuntu@192.168.0.200" in out

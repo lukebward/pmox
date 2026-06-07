@@ -30,7 +30,7 @@ from typing import List, Optional
 
 import typer
 
-from . import __version__, catalog, provision, views
+from . import __version__, catalog, ipam, provision, views
 from .client import ProxmoxClient
 from .config import ConfigError, Settings, _parse_bool, load_settings
 from .output import (
@@ -911,6 +911,79 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                     call=lambda: client.create_guest(target_node, "qemu", target_vmid, **params),
                     params={"vmid": target_vmid, **params},
                 )
+
+        @group.command("up", help="Create a ready-to-SSH VM with an auto-allocated static IP (seamless, token-only).")
+        def _up(
+            ctx: typer.Context,
+            name: str = typer.Argument(..., help="VM name."),
+            image: str = typer.Option(..., "--image", help="Cloud image: catalog name, https URL, or import volid."),
+            size: str = typer.Option("small", "--size", help="Sizing profile: small | medium | large."),
+            disk: Optional[int] = typer.Option(None, "--disk", help="Disk size in GiB."),
+            node: Optional[str] = typer.Option(None, "--node", "-n", help="Node (auto-picked if one node)."),
+            storage: str = typer.Option("local-lvm", "--storage", help="Storage for the disk/cloud-init."),
+            import_storage: Optional[str] = typer.Option(None, "--import-storage", help="Storage to hold the imported image (default: auto-detect)."),
+            ip: Optional[str] = typer.Option(None, "--ip", help="Static <cidr>,gw=<ip> to use instead of auto-allocating."),
+            ssh_key: Optional[str] = typer.Option(None, "--ssh-key", help="SSH public key path (default ~/.ssh/id_ed25519.pub; generated if missing)."),
+            no_ssh_key: bool = typer.Option(False, "--no-ssh-key", help="Don't attach or generate an SSH key."),
+            ciuser: Optional[str] = typer.Option(None, "--ciuser", help="Cloud-init user (default from config)."),
+            vmid: Optional[int] = typer.Option(None, "--vmid", help="VMID (auto-assigned if omitted)."),
+        ):
+            with error_boundary(ctx.obj.json):
+                client = _get_client(ctx)
+                settings = ctx.obj.settings
+                target_node = node or _single_node_or_die(client)
+                target_vmid = vmid if vmid is not None else int(client.cluster_nextid())
+                profile = catalog.size_params(size)
+
+                if ip:
+                    ipconfig = provision.build_ipconfig(ip)
+                    chosen_ip = ip.split(",", 1)[0].split("/", 1)[0]
+                else:
+                    if not (settings.net_cidr and settings.net_gateway and settings.net_pool):
+                        raise ValueError(
+                            "vm up needs a static-IP pool. Set [network] cidr/gateway/pool in your "
+                            "pmox config (or PROXMOX_NET_CIDR/GATEWAY/POOL), or pass --ip explicitly."
+                        )
+                    allocated = ipam.allocate_ip(
+                        client, cidr=settings.net_cidr, gateway=settings.net_gateway, pool=settings.net_pool
+                    )
+                    ipconfig = f"ip={allocated},gw={settings.net_gateway}"
+                    chosen_ip = allocated.split("/", 1)[0]
+
+                needs_import = catalog.resolve_image(image)["kind"] != "volid"
+                resolved_import = (
+                    provision.resolve_import_storage(client, target_node, import_storage or settings.default_import_storage)
+                    if needs_import else None
+                )
+
+                sshkeys = None
+                if not no_ssh_key:
+                    key_path = ssh_key or settings.default_ssh_key or str(Path.home() / ".ssh" / "id_ed25519.pub")
+                    sshkeys = provision.ensure_ssh_key(key_path)
+
+                chosen_ciuser = ciuser or settings.default_ciuser
+                plan = provision.build_vm_image_plan(
+                    client, node=target_node, vmid=target_vmid, name=name,
+                    cores=profile["cores"], memory=profile["memory"], disk=disk,
+                    storage=storage, import_storage=resolved_import, image=image,
+                    sshkeys=sshkeys, ipconfig=ipconfig, ciuser=chosen_ciuser,
+                    cipassword=None, nameserver=settings.net_nameserver, start=True,
+                )
+                if ctx.obj.dry_run:
+                    print(json.dumps({"dry_run": True, "op": "qemu.up", "node": target_node, "plan": plan}, default=str, indent=2))
+                    return
+                require_dangerous(ctx.obj.dangerous)
+                provision.execute_plan(client, target_node, plan, waiter=lambda n, upid: _maybe_wait(ctx, n, upid))
+
+                if chosen_ciuser:
+                    ssh_hint = f"ssh {chosen_ciuser}@{chosen_ip}"
+                else:
+                    ssh_hint = f"ssh <image's default user>@{chosen_ip}"
+                if ctx.obj.json:
+                    emit({"vmid": target_vmid, "name": name, "node": target_node, "ip": chosen_ip, "ssh": ssh_hint}, json_output=True)
+                else:
+                    console.print(f"VM {target_vmid}  {name}  ip {chosen_ip}")
+                    console.print(ssh_hint)
 
     if kind == "lxc":
 
