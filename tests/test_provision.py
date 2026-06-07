@@ -142,3 +142,27 @@ def test_build_vm_clone_plan_cipassword_and_nameserver():
     ci = plan[1]["args"]
     assert ci["cipassword"] == "s3cr3t"
     assert ci["nameserver"] == "8.8.8.8"
+
+
+def test_build_template_plan_builds_and_converts():
+    c = MagicMock()
+    c.storage_content.return_value = []  # not cached → download
+    plan = provision.build_template_plan(c, node="p1", vmid=9000, name="ubuntu-2404-tmpl", storage="local", image="ubuntu-24.04")
+    assert [s["op"] for s in plan] == ["download_url", "create_guest", "convert_to_template"]
+    create = next(s for s in plan if s["op"] == "create_guest")["args"]
+    # template carries the cloud-init drive + import disk, but NO user cloud-init keys
+    assert create["ide2"] == "local:cloudinit"
+    assert "import-from=local:import/noble-server-cloudimg-amd64.qcow2" in create["scsi0"]
+    assert "sshkeys" not in create and "ciuser" not in create
+    convert = plan[-1]
+    assert convert["args"] == {"node": "p1", "kind": "qemu", "vmid": 9000}
+    assert convert["await_task"] is False
+    # no start step for a template
+    assert all(s["op"] != "guest_power" for s in plan)
+
+
+def test_build_template_plan_cached_image():
+    c = MagicMock()
+    c.storage_content.return_value = [{"volid": "local:import/noble-server-cloudimg-amd64.qcow2"}]
+    plan = provision.build_template_plan(c, node="p1", vmid=9000, name=None, storage="local", image="ubuntu-24.04")
+    assert [s["op"] for s in plan] == ["create_guest", "convert_to_template"]

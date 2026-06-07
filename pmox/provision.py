@@ -191,3 +191,21 @@ def build_vm_clone_plan(
     if start:
         plan.append(step("guest_power", {"node": node, "kind": "qemu", "vmid": newid, "action": "start"}, await_task=True, describe="start"))
     return plan
+
+
+def build_template_plan(client, *, node, vmid, name, storage, image, cores=1, memory=1024) -> list:
+    """Build a golden cloud-init template: import the image + cloud-init drive, then convert."""
+    plan = build_vm_image_plan(
+        client,
+        node=node,
+        vmid=vmid,
+        name=name,
+        cores=cores,
+        memory=memory,
+        disk=None,
+        storage=storage,
+        image=image,
+        start=False,
+    )
+    plan.append(step("convert_to_template", {"node": node, "kind": "qemu", "vmid": vmid}, await_task=False, describe="convert to template"))
+    return plan
