@@ -137,6 +137,7 @@ pmox vm tag <vmid> --add t1,t2       add tags; --remove / --set also available (
 pmox vm start|shutdown|reboot|suspend|resume <vmid>      (needs --dangerous)
 pmox vm stop|reset <vmid>                                (needs --dangerous --yes)
 pmox vm new [name] [--image img | --from-template id]    create VM (needs --dangerous; see Provisioning)
+pmox vm up <name> --image <name>                         ready-to-SSH VM, auto static IP (needs [network] config)
 pmox vm create <vmid> --node N [-o key=val ...]          low-level create
 pmox vm clone <vmid> --newid <id> [--name X] [--full] [--target N]
 pmox vm migrate <vmid> --target N [--online]             (needs --dangerous --yes)
@@ -196,6 +197,26 @@ Proxmox volume ID. Cloud-init options: `--ssh-key` (repeatable), `--ip dhcp|<cid
 **No-checksum caveat:** catalog images are downloaded over HTTPS without checksum
 verification (no warning in v1). For integrity, supply `--image <url>` from a
 trusted source or a pre-verified image.
+
+### Seamless one-shot VM (`vm up`)
+
+With a static-IP pool configured once:
+
+```toml
+[network]
+cidr = "192.168.0.0/24"
+gateway = "192.168.0.1"
+pool = "192.168.0.200-192.168.0.250"   # MUST be outside your DHCP scope
+```
+
+```
+pmox --dangerous vm up web --image ubuntu-24.04 --wait
+```
+
+pmox allocates the lowest free address in the pool (by scanning existing static
+`ipconfigN` across the cluster), routes the image import to a file-based storage,
+ensures an SSH key (generating `~/.ssh/id_ed25519.pub` if absent), and prints the
+IP + `ssh` command. No guest agent required.
 
 ### Clone from a template (`vm new --from-template`)
 

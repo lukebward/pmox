@@ -144,6 +144,18 @@ pmox --dangerous vm new web \
 pmox auto-picks a VMID and node, imports the image, wires cloud-init, and
 waits for the task to complete.
 
+### Seamless VM with an auto-allocated static IP
+
+```
+pmox --dangerous vm up web --image ubuntu-24.04 --wait
+```
+
+Requires a `[network]` pool in config (`cidr`/`gateway`/`pool`, the pool outside
+your DHCP scope). pmox allocates a free static IP from the pool, auto-routes the
+image import to a storage with the `import` content type, and ensures an SSH key.
+`pmox vm ip <vmid>` returns the address immediately (read from cloud-init config —
+no guest agent needed).
+
 ### Ready container (ready to SSH)
 
 ```
@@ -285,6 +297,11 @@ pmox --dangerous vm new <name> [--image <name|url|volid>] [--from-template <vmid
                                 [--ssh-key <path>] [--ip dhcp|<cidr>,gw=<ip>]
                                 [--ciuser <u>] [--cipassword <p>] [--nameserver <dns>]
                                 [-o key=value] [--wait] [--dry-run]
+pmox --dangerous vm up <name> --image <name|url|volid>
+                               [--size ...] [--disk <GiB>] [--node <node>]
+                               [--storage <disk>] [--import-storage <storage>]
+                               [--ip <cidr>,gw=<ip>] [--ssh-key <path>] [--no-ssh-key]
+                               [--ciuser <u>] [--wait] [--dry-run]
 pmox --dangerous ct new <name> --template <name|volid>
                                 [--size small|medium|large] [--disk <GiB>]
                                 [--storage <storage>] [--template-storage <storage>]
