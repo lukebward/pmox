@@ -73,20 +73,29 @@ def execute_plan(client, node: str, plan: list, waiter) -> list:
     return results
 
 
-def _resolve_image_volid(client, node: str, storage: str, image: str):
-    """Return (volid, download_step_or_None) for a --image argument."""
+def _resolve_image_volid(client, node: str, import_storage: str, image: str):
+    """Return (volid, download_step_or_None) for a --image argument.
+
+    ``import_storage`` is the file-based storage that holds the downloaded image;
+    the VM's disk lives on a separate (possibly lvmthin) storage.
+    """
     spec = catalog.resolve_image(image)
     if spec["kind"] == "volid":
+        if ":iso/" in spec["volid"]:
+            raise ValueError(
+                f"{spec['volid']!r} is an installer ISO, not a cloud image. Use a cloud image: "
+                f"a catalog name (e.g. 'ubuntu-24.04'), an https URL, or an import volid."
+            )
         return spec["volid"], None
-    volid = f"{storage}:import/{spec['filename']}"
-    present = any(c.get("volid") == volid for c in client.storage_content(node, storage))
+    volid = f"{import_storage}:import/{spec['filename']}"
+    present = any(c.get("volid") == volid for c in client.storage_content(node, import_storage))
     if present:
         return volid, None
     download = step(
         "download_url",
         {
             "node": node,
-            "storage": storage,
+            "storage": import_storage,
             "url": spec["url"],
             "content": "import",
             "filename": spec["filename"],
@@ -109,6 +118,7 @@ def build_vm_image_plan(
     memory,
     disk,
     storage,
+    import_storage=None,
     image,
     sshkeys=None,
     ipconfig=None,
@@ -119,7 +129,7 @@ def build_vm_image_plan(
     extra=None,
 ) -> list:
     """Build the ordered plan for an all-in-one cloud-init VM."""
-    volid, download = _resolve_image_volid(client, node, storage, image)
+    volid, download = _resolve_image_volid(client, node, import_storage or storage, image)
     plan = []
     if download:
         plan.append(download)

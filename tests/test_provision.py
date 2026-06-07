@@ -279,3 +279,28 @@ def test_resolve_import_storage_none_available_raises():
     c = _storage_client([{"storage": "local-lvm", "content": "images,rootdir", "plugintype": "lvmthin"}])
     with pytest.raises(RuntimeError, match="No storage"):
         provision.resolve_import_storage(c, "p1")
+
+
+def test_build_vm_image_plan_routes_import_to_separate_storage():
+    c = _content_client(existing_volids=[])
+    plan = provision.build_vm_image_plan(
+        c, node="p1", vmid=100, name="web", cores=1, memory=1024, disk=50,
+        storage="local-lvm", import_storage="local", image="ubuntu-24.04",
+        sshkeys=None, ipconfig=None, ciuser=None, cipassword=None, nameserver=None, start=True,
+    )
+    download = next(s for s in plan if s["op"] == "download_url")["args"]
+    assert download["storage"] == "local"
+    create = next(s for s in plan if s["op"] == "create_guest")["args"]
+    assert create["scsi0"] == "local-lvm:0,import-from=local:import/noble-server-cloudimg-amd64.qcow2,iothread=1"
+    assert create["ide2"] == "local-lvm:cloudinit"
+    c.storage_content.assert_called_with("p1", "local")
+
+
+def test_build_vm_image_plan_rejects_iso_volid():
+    c = _content_client()
+    with pytest.raises(ValueError, match="installer ISO"):
+        provision.build_vm_image_plan(
+            c, node="p1", vmid=100, name=None, cores=1, memory=1024, disk=None,
+            storage="local-lvm", image="local:iso/ubuntu-24.04.1-live-server-amd64.iso",
+            sshkeys=None, ipconfig=None, ciuser=None, cipassword=None, nameserver=None, start=False,
+        )
