@@ -858,6 +858,110 @@ def test_describe_ct(fake_client, creds):
     assert json.loads(r.output)["kind"] == "lxc"
 
 
+def _ip_row(name="web-01"):
+    row = {"vmid": 150, "node": "lukeserver"}
+    if name is not None:
+        row["name"] = name
+    return [row]
+
+
+def test_vm_ip_filtered(fake_client, creds):
+    fake_client.cluster_resources.return_value = _ip_row()
+    fake_client.agent_network_interfaces.return_value = {"result": [
+        {"name": "lo", "hardware-address": "0", "ip-addresses": [
+            {"ip-address-type": "ipv4", "ip-address": "127.0.0.1", "prefix": 8}]},
+        {"name": "eth0", "hardware-address": "bc:24:11:aa:bb:cc", "ip-addresses": [
+            {"ip-address-type": "ipv4", "ip-address": "192.168.1.50", "prefix": 24},
+            {"ip-address-type": "ipv6", "ip-address": "fe80::1", "prefix": 64}]},
+    ]}
+    r = inv(["--no-json", "vm", "ip", "150"], creds)
+    assert r.exit_code == 0, r.output
+    out = plain(r.output)
+    assert "primary 192.168.1.50" in out
+    assert "eth0" in out
+    assert "127.0.0.1" not in out  # loopback hidden by default
+    assert "fe80::1" not in out    # link-local hidden by default
+
+
+def test_vm_ip_all_shows_loopback_and_mac(fake_client, creds):
+    fake_client.cluster_resources.return_value = _ip_row(name=None)  # exercises name-absent header
+    fake_client.agent_network_interfaces.return_value = {"result": [
+        {"name": "lo", "ip-addresses": [  # no hardware-address -> MAC '-'
+            {"ip-address-type": "ipv4", "ip-address": "127.0.0.1", "prefix": 8}]},
+        {"name": "eth0", "hardware-address": "bc:24:11:aa:bb:cc", "ip-addresses": [
+            {"ip-address-type": "ipv4", "ip-address": "192.168.1.50", "prefix": 24}]},
+    ]}
+    r = inv(["--no-json", "vm", "ip", "150", "--all"], creds)
+    assert r.exit_code == 0, r.output
+    out = plain(r.output)
+    assert "127.0.0.1" in out      # loopback shown with --all
+    assert "bc:24:11" in out       # MAC shown (fold-safe prefix)
+
+
+def test_vm_ip_json_full_data(fake_client, creds):
+    fake_client.cluster_resources.return_value = _ip_row()
+    fake_client.agent_network_interfaces.return_value = {"result": [
+        {"name": "eth0", "hardware-address": "bc:24:11:aa:bb:cc", "ip-addresses": [
+            {"ip-address-type": "ipv4", "ip-address": "192.168.1.50", "prefix": 24}]},
+    ]}
+    r = inv(["--json", "vm", "ip", "150"], creds)
+    assert r.exit_code == 0, r.output
+    data = json.loads(r.output)
+    assert data["primary"] == "192.168.1.50"
+    assert data["interfaces"][0]["name"] == "eth0"
+    fake_client.agent_network_interfaces.assert_called_once_with("lukeserver", 150)
+
+
+def test_ct_ip_uses_interfaces_endpoint(fake_client, creds):
+    fake_client.cluster_resources.return_value = [{"vmid": 200, "node": "pve1", "name": "ct"}]
+    fake_client.lxc_interfaces.return_value = [{"name": "eth0", "hwaddr": "aa:bb", "inet": "10.0.0.5/24"}]
+    r = inv(["--json", "ct", "ip", "200"], creds)
+    assert r.exit_code == 0, r.output
+    data = json.loads(r.output)
+    assert data["primary"] == "10.0.0.5" and data["source"] == "lxc-interfaces"
+    fake_client.lxc_interfaces.assert_called_once_with("pve1", 200)
+
+
+def test_vm_ip_agent_down_error_envelope(fake_client, creds):
+    fake_client.cluster_resources.return_value = _ip_row()
+    fake_client.agent_network_interfaces.side_effect = RuntimeError("guest agent is not running")
+    r = inv(["--json", "vm", "ip", "150"], creds)
+    assert r.exit_code == 1, r.output
+    payload = json.loads(r.output)
+    assert payload["ok"] is False and payload["error"] == "error"
+    assert "agent: 1" in payload["message"]
+
+
+def test_describe_includes_network(fake_client, creds):
+    fake_client.resolve_node.return_value = "lukeserver"
+    fake_client.guest_status.return_value = {"status": "running"}
+    fake_client.guest_config.return_value = {"cores": 2}
+    fake_client.list_snapshots.return_value = []
+    fake_client.list_tasks.return_value = []
+    fake_client.cluster_resources.return_value = _ip_row()
+    fake_client.agent_network_interfaces.return_value = {"result": [
+        {"name": "eth0", "hardware-address": "x", "ip-addresses": [
+            {"ip-address-type": "ipv4", "ip-address": "192.168.1.50", "prefix": 24}]},
+    ]}
+    r = inv(["--json", "vm", "describe", "150"], creds)
+    assert r.exit_code == 0, r.output
+    data = json.loads(r.output)
+    assert data["network"]["available"] is True and data["network"]["primary"] == "192.168.1.50"
+
+
+def test_describe_human_network_unavailable(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    fake_client.guest_status.return_value = {"status": "running"}
+    fake_client.guest_config.return_value = {}
+    fake_client.list_snapshots.return_value = []
+    fake_client.list_tasks.return_value = []
+    fake_client.cluster_resources.return_value = [{"vmid": 100, "node": "pve1", "name": "x"}]
+    fake_client.agent_network_interfaces.side_effect = RuntimeError("agent down")
+    r = inv(["--no-json", "vm", "describe", "100"], creds)
+    assert r.exit_code == 0, r.output
+    assert "network: unavailable" in plain(r.output)
+
+
 # ------------------------------------------------- Task 5: health top-level command --
 
 

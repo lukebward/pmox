@@ -422,6 +422,53 @@ HEALTH_STORAGE_COLUMNS = [
     Column("Flags", row_formatter=lambda r: ", ".join(r.get("flags") or []) or "-"),
 ]
 
+IP_COLUMNS = [
+    Column("Interface", "name"),
+    Column("IPv4", "ipv4"),
+    Column("IPv6", "ipv6"),
+]
+
+IP_ALL_COLUMNS = [
+    Column("Interface", "name"),
+    Column("MAC", "mac"),
+    Column("IPv4", "ipv4"),
+    Column("IPv6", "ipv6"),
+]
+
+
+def _ip_rows_filtered(interfaces) -> List[dict]:
+    """Non-loopback interfaces with their global IPv4/IPv6 (default view)."""
+    rows = []
+    for iface in interfaces:
+        v4 = [a["address"] for a in iface["addresses"] if a["family"] == "ipv4" and a["scope"] == "global"]
+        v6 = [a["address"] for a in iface["addresses"] if a["family"] == "ipv6" and a["scope"] == "global"]
+        if not v4 and not v6:
+            continue
+        rows.append({"name": iface["name"], "ipv4": ", ".join(v4) or "-", "ipv6": ", ".join(v6) or "-"})
+    return rows
+
+
+def _ip_rows_all(interfaces) -> List[dict]:
+    """Every interface and address with prefixes + MAC (--all view)."""
+    rows = []
+    for iface in interfaces:
+        v4 = [f'{a["address"]}/{a["prefix"]}' for a in iface["addresses"] if a["family"] == "ipv4"]
+        v6 = [f'{a["address"]}/{a["prefix"]}' for a in iface["addresses"] if a["family"] == "ipv6"]
+        rows.append({
+            "name": iface["name"], "mac": iface.get("mac") or "-",
+            "ipv4": ", ".join(v4) or "-", "ipv6": ", ".join(v6) or "-",
+        })
+    return rows
+
+
+def _print_network_section(network) -> None:
+    """Render the network block inside `describe` (human mode)."""
+    if not network.get("available"):
+        console.print(f"[dim]network: unavailable ({network.get('reason', 'unknown')})[/dim]")
+        return
+    console.print(f"network · primary {network.get('primary') or '-'}")
+    emit(_ip_rows_filtered(network.get("interfaces", [])), columns=IP_COLUMNS, json_output=False)
+
 
 # ---- root app ----
 def _version_callback(value: bool):
@@ -607,8 +654,27 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
             else:
                 console.print(build_kv_table(data["status"], title=f"{label} {vmid} status"))
                 console.print(build_kv_table(data["config"], title="config"))
+                _print_network_section(data["network"])
                 emit(data["snapshots"], columns=SNAPSHOT_COLUMNS, json_output=False, title="snapshots")
                 emit(data["recent_tasks"], columns=TASK_COLUMNS, json_output=False, title="recent tasks")
+
+    @group.command("ip", help=f"Show the live IP address(es) of a {label} (VM: via guest agent; CT: via interfaces).")
+    def _ip(
+        ctx: typer.Context,
+        vmid: int = vmid_arg,
+        node: Optional[str] = node_opt,
+        all_: bool = typer.Option(False, "--all", "-a", help="Include loopback, IPv6 link-local, and MAC addresses."),
+    ):
+        with error_boundary(ctx.obj.json):
+            client = _get_client(ctx)
+            data = views.guest_ip_addresses(client, kind, vmid, node=node)
+            if ctx.obj.json:
+                emit(data, json_output=True)
+                return
+            name = f" ({data['name']})" if data.get("name") else ""
+            console.print(f"{label} {vmid}{name} on {data['node']} · primary {data['primary'] or '-'}")
+            rows = _ip_rows_all(data["interfaces"]) if all_ else _ip_rows_filtered(data["interfaces"])
+            emit(rows, columns=(IP_ALL_COLUMNS if all_ else IP_COLUMNS), json_output=False)
 
     @group.command("set", help=f"Update configuration of a {label} (cores, memory, disks, nics, tags, …).")
     def _set(
