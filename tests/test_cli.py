@@ -1554,3 +1554,34 @@ def test_vm_up_human_output(fake_client, creds, tmp_path, monkeypatch):
     out = plain(r.output)
     assert "192.168.0.200" in out
     assert "ssh ubuntu@192.168.0.200" in out
+
+
+def test_vm_up_dry_run_does_not_generate_key(fake_client, creds, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli.provision.subprocess, "run", lambda *a, **k: calls.append(a))
+    fake_client.cluster_nextid.return_value = "150"
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.cluster_resources.return_value = []
+    fake_client.storage_content.return_value = []
+    missing = tmp_path / "newkey.pub"
+    r = inv(["--dry-run", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+             "--ssh-key", str(missing)], _net_creds(creds))
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["op"] == "qemu.up"
+    assert calls == []            # ssh-keygen never invoked
+    assert not missing.exists()   # no key generated during dry-run
+
+
+def test_vm_up_readonly_does_not_generate_key(fake_client, creds, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli.provision.subprocess, "run", lambda *a, **k: calls.append(a))
+    fake_client.cluster_nextid.return_value = "150"
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.cluster_resources.return_value = []
+    fake_client.storage_content.return_value = []
+    missing = tmp_path / "newkey.pub"
+    r = inv(["vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+             "--ssh-key", str(missing)], _net_creds(creds))  # no --dangerous -> exit 4
+    assert r.exit_code == 4, r.output
+    assert calls == []            # gate blocked BEFORE any key generation
+    assert not missing.exists()

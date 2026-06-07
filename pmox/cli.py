@@ -956,24 +956,31 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                     if needs_import else None
                 )
 
-                sshkeys = None
+                key_path = None
                 if not no_ssh_key:
                     key_path = ssh_key or settings.default_ssh_key or str(Path.home() / ".ssh" / "id_ed25519.pub")
-                    sshkeys = provision.ensure_ssh_key(key_path)
-
                 chosen_ciuser = ciuser or settings.default_ciuser
-                plan = provision.build_vm_image_plan(
-                    client, node=target_node, vmid=target_vmid, name=name,
-                    cores=profile["cores"], memory=profile["memory"], disk=disk,
-                    storage=storage, import_storage=resolved_import, image=image,
-                    sshkeys=sshkeys, ipconfig=ipconfig, ciuser=chosen_ciuser,
-                    cipassword=None, nameserver=settings.net_nameserver, start=True,
-                )
+
+                def _build(sshkeys):
+                    return provision.build_vm_image_plan(
+                        client, node=target_node, vmid=target_vmid, name=name,
+                        cores=profile["cores"], memory=profile["memory"], disk=disk,
+                        storage=storage, import_storage=resolved_import, image=image,
+                        sshkeys=sshkeys, ipconfig=ipconfig, ciuser=chosen_ciuser,
+                        cipassword=None, nameserver=settings.net_nameserver, start=True,
+                    )
+
                 if ctx.obj.dry_run:
-                    print(json.dumps({"dry_run": True, "op": "qemu.up", "node": target_node, "plan": plan}, default=str, indent=2))
+                    # dry-run must be side-effect-free: read an existing key, never generate one
+                    existing = None
+                    if key_path and Path(key_path).expanduser().exists():
+                        existing = Path(key_path).expanduser().read_text().strip()
+                    print(json.dumps({"dry_run": True, "op": "qemu.up", "node": target_node, "plan": _build(existing)}, default=str, indent=2))
                     return
+
                 require_dangerous(ctx.obj.dangerous)
-                provision.execute_plan(client, target_node, plan, waiter=lambda n, upid: _maybe_wait(ctx, n, upid))
+                sshkeys = provision.ensure_ssh_key(key_path) if key_path else None
+                provision.execute_plan(client, target_node, _build(sshkeys), waiter=lambda n, upid: _maybe_wait(ctx, n, upid))
 
                 if ctx.obj.json:
                     ssh_val = f"ssh {chosen_ciuser}@{chosen_ip}" if chosen_ciuser else None
