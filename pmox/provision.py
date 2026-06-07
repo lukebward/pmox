@@ -24,6 +24,35 @@ def build_ipconfig(spec: str) -> str:
     return "ip=dhcp" if spec == "dhcp" else f"ip={spec}"
 
 
+def resolve_import_storage(client, node: str, explicit=None) -> str:
+    """Pick a file-based storage that can hold imported cloud-image disks.
+
+    A token can't enable storage content types, so when none is available we
+    raise an actionable error instead of guessing.
+    """
+    storages = client.list_storage(node)
+    if explicit:
+        match = next((s for s in storages if s.get("storage") == explicit), None)
+        if match is None:
+            raise LookupError(f"Storage {explicit!r} not found on {node}.")
+        if "import" not in str(match.get("content", "")).split(","):
+            raise RuntimeError(
+                f"Storage {explicit!r} on {node} lacks the 'import' content type. "
+                f"Enable it: Datacenter -> Storage -> {explicit} -> Edit -> check 'Import', "
+                f"or `pvesm set {explicit} --content <existing>,import`."
+            )
+        return explicit
+    candidates = [s for s in storages if "import" in str(s.get("content", "")).split(",")]
+    if not candidates:
+        raise RuntimeError(
+            f"No storage on {node} has the 'import' content type, required to import a "
+            f"cloud image. Enable it on a directory storage: Datacenter -> Storage -> "
+            f"<storage> -> Edit -> check 'Import', or `pvesm set <storage> --content <existing>,import`."
+        )
+    candidates.sort(key=lambda s: (s.get("plugintype") != "dir", s.get("storage", "")))
+    return candidates[0]["storage"]
+
+
 def step(op: str, args: dict, *, await_task: bool = False, describe: str = "") -> dict:
     """Construct one plan step."""
     return {"op": op, "args": args, "await_task": await_task, "describe": describe}

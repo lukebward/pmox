@@ -233,3 +233,49 @@ def test_build_ct_plan_unknown_template_raises():
             storage="local-lvm", template_storage="local", disk=8, cores=1, memory=1024,
             sshkeys=None, ip="dhcp", password=None, start=False,
         )
+
+
+def _storage_client(storages):
+    c = MagicMock()
+    c.list_storage.return_value = storages
+    return c
+
+
+def test_resolve_import_storage_auto_picks_import_capable():
+    c = _storage_client([
+        {"storage": "local-lvm", "content": "images,rootdir", "plugintype": "lvmthin"},
+        {"storage": "local", "content": "import,iso,vztmpl,backup", "plugintype": "dir"},
+    ])
+    assert provision.resolve_import_storage(c, "p1") == "local"
+
+
+def test_resolve_import_storage_prefers_dir_then_name():
+    c = _storage_client([
+        {"storage": "zfsimp", "content": "import,images", "plugintype": "zfspool"},
+        {"storage": "diry", "content": "import", "plugintype": "dir"},
+        {"storage": "dirx", "content": "import", "plugintype": "dir"},
+    ])
+    assert provision.resolve_import_storage(c, "p1") == "dirx"
+
+
+def test_resolve_import_storage_explicit_ok():
+    c = _storage_client([{"storage": "local", "content": "import,iso", "plugintype": "dir"}])
+    assert provision.resolve_import_storage(c, "p1", "local") == "local"
+
+
+def test_resolve_import_storage_explicit_not_found_raises():
+    c = _storage_client([{"storage": "local", "content": "import", "plugintype": "dir"}])
+    with pytest.raises(LookupError):
+        provision.resolve_import_storage(c, "p1", "nope")
+
+
+def test_resolve_import_storage_explicit_lacks_import_raises():
+    c = _storage_client([{"storage": "local-lvm", "content": "images,rootdir", "plugintype": "lvmthin"}])
+    with pytest.raises(RuntimeError, match="import"):
+        provision.resolve_import_storage(c, "p1", "local-lvm")
+
+
+def test_resolve_import_storage_none_available_raises():
+    c = _storage_client([{"storage": "local-lvm", "content": "images,rootdir", "plugintype": "lvmthin"}])
+    with pytest.raises(RuntimeError, match="No storage"):
+        provision.resolve_import_storage(c, "p1")
