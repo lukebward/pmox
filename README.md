@@ -22,7 +22,7 @@ pmox --dangerous vm rename 100 web01
 pmox --dangerous vm tag 100 --add prod,k3s
 
 pmox --dangerous vm start 100
-pmox --dangerous --yes vm delete 100
+pmox --dangerous vm delete 100 --yes
 ```
 
 ## Safety model
@@ -39,6 +39,9 @@ So:
 - **Explore** with no flags — nothing can be modified.
 - **Change** something benign (e.g. `start`) — add `--dangerous`.
 - **Destroy** something (e.g. `delete`) — add `--dangerous` **and** `--yes`.
+  Note: `--dangerous` is global, but `--yes` is a **per-subcommand** flag, so it
+  goes *after* the subcommand — `pmox --dangerous vm delete 100 --yes`, not
+  `pmox --dangerous --yes vm delete 100`.
 
 When running non-interactively (e.g. an AI calling the CLI), a destructive op
 *without* `--yes` is refused rather than silently prompted. Exit codes:

@@ -32,6 +32,12 @@ pmox --dangerous vm start 100
 pmox vm start 100 --dangerous   # identical
 ```
 
+**`--yes`/`-y` is *not* a global flag** — it's a per-subcommand confirmation that
+must come **after** the subcommand (e.g. `pmox --dangerous vm delete 100 --yes`,
+never `pmox --dangerous --yes vm delete 100`, which fails with `No such option:
+--yes`). Other per-subcommand options (`-n/--node`, `--purge`, `--target`,
+`-o/--option`) likewise go after the subcommand.
+
 If a command fails with a **config error (exit 2)**, the user hasn't configured
 credentials. Tell them to set `PROXMOX_HOST`, `PROXMOX_TOKEN_ID`, and
 `PROXMOX_TOKEN_SECRET` as environment variables (or in a `.env` file). pmox
@@ -47,7 +53,9 @@ configure) requires the global `--dangerous` flag. Without it, the command
 is blocked (exit 4).
 
 ### Gate 2: `--yes`
-Destructive operations additionally require `--yes`. The destructive set is:
+Destructive operations additionally require `--yes`, a **per-subcommand** flag
+that must be placed **after** the subcommand (unlike the global `--dangerous`).
+The destructive set is:
 `vm delete`, `vm stop`, `vm reset`, `vm migrate`, `vm snapshot rollback`,
 `vm snapshot delete`, `ct delete`, `ct stop`, `ct reset`, `ct migrate`,
 `ct snapshot rollback`, `ct snapshot delete`, and **`vm set`/`ct set` with a
@@ -199,8 +207,8 @@ Confirm completion afterward with `--wait` or `pmox vm describe <vmid>`.
 ```
 pmox --dangerous vm snapshot create 100 before-upgrade
 pmox vm snapshot list 100
-pmox --dangerous --yes vm snapshot rollback 100 before-upgrade
-pmox --dangerous --yes vm snapshot delete 100 before-upgrade
+pmox --dangerous vm snapshot rollback 100 before-upgrade --yes
+pmox --dangerous vm snapshot delete 100 before-upgrade --yes
 ```
 
 ### Guest lifecycle
@@ -208,13 +216,13 @@ pmox --dangerous --yes vm snapshot delete 100 before-upgrade
 ```
 pmox --dangerous vm start 100
 pmox --dangerous vm shutdown 100      # graceful
-pmox --dangerous --yes vm stop 100   # hard stop
+pmox --dangerous vm stop 100 --yes   # hard stop
 pmox --dangerous vm reboot 100
-pmox --dangerous --yes vm reset 100  # hard reset
+pmox --dangerous vm reset 100 --yes  # hard reset
 pmox --dangerous vm suspend 100
 pmox --dangerous vm resume 100
-pmox --dangerous --yes vm delete 100 [--purge]
-pmox --dangerous --yes vm migrate 100 --target pve2 [--online]
+pmox --dangerous vm delete 100 [--purge] --yes
+pmox --dangerous vm migrate 100 --target pve2 [--online] --yes
 ```
 
 Use `ct` in place of `vm` for containers — identical subcommand surface.
@@ -303,20 +311,20 @@ pmox --dangerous ct snapshot create <vmid> <name>
 ### Destroy (need `--dangerous --yes`)
 
 ```
-pmox --dangerous --yes vm stop <vmid>
-pmox --dangerous --yes ct stop <vmid>
-pmox --dangerous --yes vm reset <vmid>
-pmox --dangerous --yes ct reset <vmid>
-pmox --dangerous --yes vm migrate <vmid> --target <node> [--online]
-pmox --dangerous --yes ct migrate <vmid> --target <node>
-pmox --dangerous --yes vm delete <vmid> [--purge]
-pmox --dangerous --yes ct delete <vmid> [--purge]
-pmox --dangerous --yes vm snapshot rollback <vmid> <name>
-pmox --dangerous --yes ct snapshot rollback <vmid> <name>
-pmox --dangerous --yes vm snapshot delete <vmid> <name>
-pmox --dangerous --yes ct snapshot delete <vmid> <name>
-pmox --dangerous --yes vm set <vmid> -o delete=<key>
-pmox --dangerous --yes ct set <vmid> -o delete=<key>
+pmox --dangerous vm stop <vmid> --yes
+pmox --dangerous ct stop <vmid> --yes
+pmox --dangerous vm reset <vmid> --yes
+pmox --dangerous ct reset <vmid> --yes
+pmox --dangerous vm migrate <vmid> --target <node> [--online] --yes
+pmox --dangerous ct migrate <vmid> --target <node> --yes
+pmox --dangerous vm delete <vmid> [--purge] --yes
+pmox --dangerous ct delete <vmid> [--purge] --yes
+pmox --dangerous vm snapshot rollback <vmid> <name> --yes
+pmox --dangerous ct snapshot rollback <vmid> <name> --yes
+pmox --dangerous vm snapshot delete <vmid> <name> --yes
+pmox --dangerous ct snapshot delete <vmid> <name> --yes
+pmox --dangerous vm set <vmid> -o delete=<key> --yes
+pmox --dangerous ct set <vmid> -o delete=<key> --yes
 ```
 
 ## Requirements and caveats
