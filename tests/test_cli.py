@@ -1096,6 +1096,7 @@ def test_vm_new_from_template_clones_and_sets_ci(fake_client, creds, tmp_path, m
     fake_client.clone_guest.assert_called_once_with(node="pve1", kind="qemu", vmid=9000, newid=120, name="web", full=1)
     ci = fake_client.update_config.call_args.kwargs
     assert ci["ciuser"] == "ubuntu" and ci["ipconfig0"] == "ip=dhcp"
+    assert ci["vmid"] == 120 and ci["node"] == "pve1"
 
 
 def test_vm_new_from_template_dry_run(fake_client, creds):

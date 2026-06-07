@@ -759,11 +759,11 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
         ):
             with error_boundary(ctx.obj.json):
                 client = _get_client(ctx)
-                if image and from_template:
+                if image and from_template is not None:
                     raise ValueError("--image and --from-template are mutually exclusive.")
                 target_vmid = vmid if vmid is not None else int(client.cluster_nextid())
 
-                if from_template:
+                if from_template is not None:
                     target_node = node or client.resolve_node(from_template)
                     if not target_node:
                         raise LookupError(f"Could not locate template {from_template} in the cluster.")
