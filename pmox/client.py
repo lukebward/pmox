@@ -123,6 +123,32 @@ class ProxmoxClient:
     def storage_content(self, node: str, storage: str) -> list:
         return self._api.nodes(node).storage(storage).content.get()
 
+    def download_url(
+        self,
+        node: str,
+        storage: str,
+        *,
+        url: str,
+        content: str,
+        filename: str,
+        checksum: Optional[str] = None,
+        checksum_algorithm: Optional[str] = None,
+    ) -> Any:
+        """Fetch a URL into a storage (async; returns a UPID).
+
+        ``content`` is ``import`` for VM disk images. The hyphenated REST path
+        segment ``download-url`` and parameter ``checksum-algorithm`` are
+        addressed via ``getattr``/dict expansion because they aren't valid
+        Python identifiers.
+        """
+        endpoint = getattr(self._api.nodes(node).storage(storage), "download-url")
+        params: dict = {"url": url, "content": content, "filename": filename}
+        if checksum is not None:
+            params["checksum"] = checksum
+        if checksum_algorithm is not None:
+            params["checksum-algorithm"] = checksum_algorithm
+        return endpoint.post(**params)
+
     # ---- tasks ----
     def list_tasks(self, node: str, **params) -> list:
         return self._api.nodes(node).tasks.get(**params)

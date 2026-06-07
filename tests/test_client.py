@@ -197,3 +197,28 @@ def test_cluster_nextid(client, api):
     api.cluster.nextid.get.return_value = "101"
     assert client.cluster_nextid() == "101"
     api.cluster.nextid.get.assert_called_once_with()
+
+
+def test_download_url(client, api):
+    seg = api.nodes.return_value.storage.return_value
+    getattr(seg, "download-url").post.return_value = "UPID:dl"
+    out = client.download_url(
+        "pve1", "local", url="https://x/y.qcow2", content="import", filename="y.qcow2",
+        checksum="abc", checksum_algorithm="sha256",
+    )
+    assert out == "UPID:dl"
+    api.nodes.assert_called_with("pve1")
+    api.nodes.return_value.storage.assert_called_with("local")
+    getattr(seg, "download-url").post.assert_called_once_with(
+        url="https://x/y.qcow2", content="import", filename="y.qcow2",
+        checksum="abc", **{"checksum-algorithm": "sha256"},
+    )
+
+
+def test_download_url_without_checksum(client, api):
+    seg = api.nodes.return_value.storage.return_value
+    getattr(seg, "download-url").post.return_value = "UPID:dl"
+    client.download_url("pve1", "local", url="https://x/y.qcow2", content="import", filename="y.qcow2")
+    getattr(seg, "download-url").post.assert_called_once_with(
+        url="https://x/y.qcow2", content="import", filename="y.qcow2",
+    )
