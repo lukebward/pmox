@@ -6,7 +6,12 @@ allowed-tools: Bash(pmox:*), Bash(python:*)
 Give me a concise health overview of my Proxmox cluster using the **read-only**
 `pmox` CLI. Do NOT pass `--dangerous`.
 
-Run and interpret (output is JSON automatically when captured):
+Start with a one-shot triage:
+
+- `pmox health` — single command that summarises node states, resource usage,
+  and guest counts in one call.
+
+Then gather detail as needed (output is JSON automatically when captured):
 
 - `pmox cluster status`
 - `pmox nodes list`
