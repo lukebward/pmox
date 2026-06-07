@@ -35,6 +35,119 @@ def describe_guest(client, kind: str, vmid: int, node: Optional[str] = None) -> 
     }
 
 
+def _addr_scope(family: str, address: str) -> str:
+    """Classify an IP as 'loopback', 'link', or 'global'."""
+    addr = (address or "").lower()
+    if family == "ipv4":
+        if addr.startswith("127."):
+            return "loopback"
+        if addr.startswith("169.254."):
+            return "link"
+        return "global"
+    if addr == "::1":
+        return "loopback"
+    if addr.startswith("fe80"):
+        return "link"
+    return "global"
+
+
+def _locate_guest(client, vmid):
+    """Cluster-resource row for a vmid (carries node + name), or None."""
+    target = int(vmid)
+    for r in client.cluster_resources(type="vm"):
+        if int(r.get("vmid", -1)) == target:
+            return r
+    return None
+
+
+def _parse_qemu_interfaces(payload) -> list:
+    """Normalize the QEMU guest-agent network-get-interfaces payload."""
+    result = payload.get("result", payload) if isinstance(payload, dict) else payload
+    interfaces = []
+    for iface in result or []:
+        addresses = []
+        for a in iface.get("ip-addresses") or []:
+            family = a.get("ip-address-type")
+            address = a.get("ip-address")
+            if not family or not address:
+                continue
+            addresses.append(
+                {"family": family, "address": address, "prefix": a.get("prefix"),
+                 "scope": _addr_scope(family, address)}
+            )
+        interfaces.append({"name": iface.get("name"), "mac": iface.get("hardware-address"), "addresses": addresses})
+    return interfaces
+
+
+def _parse_lxc_interfaces(rows) -> list:
+    """Normalize the LXC /interfaces payload (inet/inet6 CIDR strings)."""
+    interfaces = []
+    for iface in rows or []:
+        addresses = []
+        for family, key in (("ipv4", "inet"), ("ipv6", "inet6")):
+            raw = iface.get(key)
+            if not raw:
+                continue
+            for cidr in str(raw).split():
+                address, _, prefix = cidr.partition("/")
+                addresses.append(
+                    {"family": family, "address": address,
+                     "prefix": int(prefix) if prefix.isdigit() else None,
+                     "scope": _addr_scope(family, address)}
+                )
+        interfaces.append({"name": iface.get("name"), "mac": iface.get("hwaddr"), "addresses": addresses})
+    return interfaces
+
+
+def _primary_ipv4(interfaces):
+    """First global IPv4 across interfaces, in order (or None)."""
+    for iface in interfaces:
+        for a in iface["addresses"]:
+            if a["family"] == "ipv4" and a["scope"] == "global":
+                return a["address"]
+    return None
+
+
+def guest_ip_addresses(client, kind: str, vmid: int, node: Optional[str] = None) -> dict:
+    """Live network interfaces + IPs for a guest, normalized across qemu/lxc.
+
+    Raises ``LookupError`` if the guest can't be located, or ``RuntimeError`` with
+    an actionable message if the agent/interfaces endpoint can't be read.
+    """
+    row = _locate_guest(client, vmid)
+    node = node or (row.get("node") if row else None)
+    if not node:
+        raise LookupError(f"Could not locate guest {vmid} in the cluster.")
+    name = row.get("name") if row else None
+
+    if kind == "qemu":
+        source = "guest-agent"
+        try:
+            payload = client.agent_network_interfaces(node, vmid)
+        except Exception as exc:  # noqa: BLE001 - any agent failure -> actionable message
+            raise RuntimeError(
+                f"Could not read network interfaces for VM {vmid}: {exc}. "
+                f"Ensure qemu-guest-agent is installed and running in the guest and "
+                f"'agent: 1' is set (pmox vm set {vmid} -o agent=1 --dangerous)."
+            ) from exc
+        interfaces = _parse_qemu_interfaces(payload)
+    else:
+        source = "lxc-interfaces"
+        try:
+            rows = client.lxc_interfaces(node, vmid)
+        except Exception as exc:  # noqa: BLE001 - any failure -> actionable message
+            raise RuntimeError(
+                f"Could not read network interfaces for CT {vmid}: {exc}. "
+                f"The container may be stopped."
+            ) from exc
+        interfaces = _parse_lxc_interfaces(rows)
+
+    return {
+        "vmid": vmid, "node": node, "kind": kind, "name": name, "source": source,
+        "primary": _primary_ipv4(interfaces), "interfaces": interfaces,
+    }
+
+
 def summarize_health(client) -> dict:
     """One-shot cluster triage: quorum, per-node CPU/mem pressure, storage near full,
     and running/stopped guest counts, with a flat list of warnings."""
