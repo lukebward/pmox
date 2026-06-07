@@ -1167,9 +1167,19 @@ image_app = typer.Typer(help="VM cloud images: list the catalog and pull them to
 
 
 @image_app.command("list")
-def image_list(ctx: typer.Context):
-    """List the built-in VM image catalog."""
+def image_list(
+    ctx: typer.Context,
+    ct: bool = typer.Option(False, "--ct", help="List LXC container templates (live, from the node) instead of the VM catalog."),
+    node: Optional[str] = typer.Option(None, "--node", "-n", help="Node (required with --ct)."),
+):
+    """List VM cloud images (catalog) or, with --ct, container templates from a node."""
     with error_boundary(ctx.obj.json):
+        if ct:
+            if not node:
+                raise ValueError("--ct requires --node.")
+            client = _get_client(ctx)
+            emit(client.list_appliances(node), json_output=ctx.obj.json, title="Container templates")
+            return
         rows = [{"name": name, "url": e["url"], "filename": e["filename"]} for name, e in catalog.IMAGE_CATALOG.items()]
         emit(rows, json_output=ctx.obj.json, title="Image catalog")
 
@@ -1183,10 +1193,30 @@ def image_pull(
     as_template: bool = typer.Option(False, "--as-template", help="Build a reusable golden VM template instead of just downloading."),
     vmid: Optional[int] = typer.Option(None, "--vmid", help="VMID for the template (auto-assigned if omitted). Used with --as-template."),
     name: Optional[str] = typer.Option(None, "--name", help="Name for the template. Used with --as-template."),
+    ct: bool = typer.Option(False, "--ct", help="Pull an LXC container template via aplinfo instead of a VM cloud image."),
 ):
     """Download a VM cloud image to a storage (cached; needs --dangerous)."""
     with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
+
+        if ct:
+            matches = [a for a in client.list_appliances(node) if image in a.get("template", "")]
+            if not matches:
+                raise ValueError(f"No container template matching {image!r} on {node}.")
+            filename = matches[0]["template"]
+            volid = f"{storage}:vztmpl/{filename}"
+            if ctx.obj.dry_run:
+                print(json.dumps({"dry_run": True, "op": "image.pull.ct", "node": node, "params": {"volid": volid, "template": filename}}, default=str, indent=2))
+                return
+            require_dangerous(ctx.obj.dangerous)
+            if any(c.get("volid") == volid for c in client.storage_content(node, storage)):
+                _ok(ctx, f"Template already present: {volid}")
+                return
+            upid = client.download_appliance(node, storage, filename)
+            _maybe_wait(ctx, node, upid)
+            _ok(ctx, f"Pulled container template {image} -> {volid}", upid)
+            return
+
         spec = catalog.resolve_image(image)
         if spec["kind"] == "volid":
             raise ValueError("image pull expects a catalog name or URL, not an existing volid.")

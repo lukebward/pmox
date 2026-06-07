@@ -1202,3 +1202,67 @@ def test_image_pull_as_template_needs_dangerous(fake_client, creds):
     r = inv(["image", "pull", "ubuntu-24.04", "--storage", "local", "--node", "pve1", "--as-template", "--vmid", "9000"], creds)
     assert r.exit_code == 4, r.output
     fake_client.create_guest.assert_not_called()
+
+
+# ------------------------------------------------- Task 4 (C3): image list --ct and image pull --ct --
+
+
+def test_image_list_ct(fake_client, creds):
+    fake_client.list_appliances.return_value = [
+        {"template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst", "type": "lxc"},
+    ]
+    r = inv(["--json", "image", "list", "--ct", "--node", "pve1"], creds)
+    assert r.exit_code == 0, r.output
+    assert any("ubuntu-24.04" in row["template"] for row in json.loads(r.output))
+    fake_client.list_appliances.assert_called_once_with("pve1")
+
+
+def test_image_list_ct_requires_node(fake_client, creds):
+    r = inv(["--json", "image", "list", "--ct"], creds)
+    assert r.exit_code == 1, r.output
+    fake_client.list_appliances.assert_not_called()
+
+
+def test_image_pull_ct_downloads(fake_client, creds, monkeypatch):
+    import pmox.cli as cli
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.list_appliances.return_value = [{"template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"}]
+    fake_client.storage_content.return_value = []
+    fake_client.download_appliance.return_value = "UPID:apl"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--dangerous", "image", "pull", "ubuntu-24.04", "--ct", "--storage", "local", "--node", "pve1"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.download_appliance.assert_called_once_with("pve1", "local", "ubuntu-24.04-standard_24.04-2_amd64.tar.zst")
+
+
+def test_image_pull_ct_needs_dangerous(fake_client, creds):
+    fake_client.list_appliances.return_value = [{"template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"}]
+    fake_client.storage_content.return_value = []
+    r = inv(["image", "pull", "ubuntu-24.04", "--ct", "--storage", "local", "--node", "pve1"], creds)
+    assert r.exit_code == 4, r.output
+    fake_client.download_appliance.assert_not_called()
+
+
+def test_image_pull_ct_cached_skips(fake_client, creds):
+    fake_client.list_appliances.return_value = [{"template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"}]
+    fake_client.storage_content.return_value = [{"volid": "local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst"}]
+    r = inv(["--dangerous", "image", "pull", "ubuntu-24.04", "--ct", "--storage", "local", "--node", "pve1"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.download_appliance.assert_not_called()
+
+
+def test_image_pull_ct_unknown_template(fake_client, creds):
+    fake_client.list_appliances.return_value = [{"template": "debian-12-standard_12.7-1_amd64.tar.zst"}]
+    r = inv(["--dangerous", "image", "pull", "ubuntu-24.04", "--ct", "--storage", "local", "--node", "pve1"], creds)
+    assert r.exit_code == 1, r.output
+    fake_client.download_appliance.assert_not_called()
+
+
+def test_image_pull_ct_dry_run(fake_client, creds):
+    fake_client.list_appliances.return_value = [{"template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"}]
+    r = inv(["--dry-run", "image", "pull", "ubuntu-24.04", "--ct", "--storage", "local", "--node", "pve1"], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["op"] == "image.pull.ct"
+    assert payload["dry_run"] is True
+    fake_client.download_appliance.assert_not_called()
