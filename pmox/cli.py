@@ -396,6 +396,21 @@ RESOURCE_COLUMNS = [
     Column("Max Mem", "maxmem", human_bytes),
 ]
 
+HEALTH_NODE_COLUMNS = [
+    Column("Node", "node"),
+    Column("Status", "status", status_fmt),
+    Column("CPU", "cpu_pct", percent),
+    Column("Mem", "mem_pct", percent),
+    Column("Flags", row_formatter=lambda r: ", ".join(r.get("flags") or []) or "-"),
+]
+
+HEALTH_STORAGE_COLUMNS = [
+    Column("Storage", "storage"),
+    Column("Node", "node"),
+    Column("Use%", "used_pct", percent),
+    Column("Flags", row_formatter=lambda r: ", ".join(r.get("flags") or []) or "-"),
+]
+
 
 # ---- root app ----
 def _version_callback(value: bool):
@@ -480,6 +495,24 @@ def server_version(ctx: typer.Context):
     with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
         emit(client.version(), json_output=ctx.obj.json, title="Proxmox version")
+
+
+@app.command("health")
+def health(ctx: typer.Context):
+    """One-shot cluster health triage (read-only)."""
+    with error_boundary(ctx.obj.json):
+        client = _get_client(ctx)
+        data = views.summarize_health(client)
+        if ctx.obj.json:
+            emit(data, json_output=True)
+            return
+        quorum = "[green]quorate[/green]" if data["quorate"] else "[red]NO QUORUM[/red]"
+        console.print(f"Cluster: {quorum} · nodes {data['nodes_online']}/{data['nodes_total']} online · "
+                      f"guests {data['guests']['running']} running / {data['guests']['stopped']} stopped")
+        emit(data["nodes"], columns=HEALTH_NODE_COLUMNS, json_output=False, title="Nodes")
+        emit(data["storage"], columns=HEALTH_STORAGE_COLUMNS, json_output=False, title="Storage")
+        for w in data["warnings"]:
+            console.print(f"[yellow]![/yellow] {w}")
 
 
 # ---- nodes ----

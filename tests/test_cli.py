@@ -845,3 +845,31 @@ def test_describe_ct(fake_client, creds):
     r = inv(["--json", "ct", "describe", "200"], creds)
     assert r.exit_code == 0, r.output
     assert json.loads(r.output)["kind"] == "lxc"
+
+
+# ------------------------------------------------- Task 5: health top-level command --
+
+
+def test_health_json(fake_client, creds):
+    fake_client.cluster_status.return_value = [{"type": "cluster", "quorate": 1}, {"type": "node", "name": "p1", "online": 1}]
+    fake_client.list_nodes.return_value = [{"node": "p1", "status": "online", "cpu": 0.1, "mem": 1, "maxmem": 10}]
+    fake_client.cluster_resources.side_effect = lambda type=None: (
+        [{"storage": "local", "node": "p1", "disk": 1, "maxdisk": 10}] if type == "storage"
+        else [{"vmid": 100, "status": "running"}]
+    )
+    r = inv(["--json", "health"], creds)
+    assert r.exit_code == 0, r.output
+    data = json.loads(r.output)
+    assert data["quorate"] is True and data["guests"]["running"] == 1
+
+
+def test_health_human(fake_client, creds):
+    fake_client.cluster_status.return_value = [{"type": "cluster", "quorate": 1}, {"type": "node", "name": "p1", "online": 1}]
+    fake_client.list_nodes.return_value = [{"node": "p1", "status": "online", "cpu": 0.9, "mem": 9, "maxmem": 10}]
+    fake_client.cluster_resources.side_effect = lambda type=None: (
+        [{"storage": "s", "node": "p1", "disk": 9, "maxdisk": 10}] if type == "storage"
+        else [{"vmid": 100, "status": "running"}]
+    )
+    r = inv(["--no-json", "health"], creds)
+    assert r.exit_code == 0, r.output
+    assert "p1" in plain(r.output)
