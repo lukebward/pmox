@@ -1,4 +1,6 @@
 import pytest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from pmox import provision
@@ -304,3 +306,26 @@ def test_build_vm_image_plan_rejects_iso_volid():
             storage="local-lvm", image="local:iso/ubuntu-24.04.1-live-server-amd64.iso",
             sshkeys=None, ipconfig=None, ciuser=None, cipassword=None, nameserver=None, start=False,
         )
+
+
+def test_ensure_ssh_key_reads_existing(tmp_path):
+    pub = tmp_path / "id_ed25519.pub"
+    pub.write_text("ssh-ed25519 EXISTING u@h\n")
+    assert provision.ensure_ssh_key(str(pub)) == "ssh-ed25519 EXISTING u@h"
+
+
+def test_ensure_ssh_key_generates_when_missing(tmp_path, monkeypatch):
+    pub = tmp_path / ".ssh" / "id_ed25519.pub"
+
+    def fake_run(cmd, **kwargs):
+        priv = cmd[cmd.index("-f") + 1]
+        Path(priv + ".pub").write_text("ssh-ed25519 GENERATED pmox\n")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(provision.subprocess, "run", fake_run)
+    assert provision.ensure_ssh_key(str(pub)) == "ssh-ed25519 GENERATED pmox"
+
+
+def test_ensure_ssh_key_bad_suffix_raises(tmp_path):
+    with pytest.raises(ValueError):
+        provision.ensure_ssh_key(str(tmp_path / "id_ed25519"))  # missing and not .pub

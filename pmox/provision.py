@@ -9,6 +9,8 @@ task UPIDs between dependent steps.
 
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
 from urllib.parse import quote
 
 from . import catalog
@@ -17,6 +19,21 @@ from . import catalog
 def encode_sshkeys(text: str) -> str:
     """URL-encode SSH public keys for the QEMU ``sshkeys`` config value."""
     return quote(text, safe="")
+
+
+def ensure_ssh_key(path: str) -> str:
+    """Return the public-key text at ``path``; generate an ed25519 keypair if absent."""
+    pub = Path(path).expanduser()
+    if not pub.exists():
+        if pub.suffix != ".pub":
+            raise ValueError(f"ssh key path must end in .pub to generate (got {path!r}).")
+        priv = pub.with_suffix("")
+        priv.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["ssh-keygen", "-t", "ed25519", "-f", str(priv), "-N", "", "-C", "pmox"],
+            check=True, capture_output=True, text=True,
+        )
+    return pub.read_text().strip()
 
 
 def build_ipconfig(spec: str) -> str:
