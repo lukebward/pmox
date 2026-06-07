@@ -6,6 +6,37 @@ All notable changes to pmox are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-07
+
+### Added
+
+- `vm up`: one-call, token-only creation of a ready-to-SSH VM. Auto-allocates a
+  static IP from a configured pool (scanning the cluster's existing static
+  `ipconfigN` as the ledger), or falls back to **DHCP** with zero config. Bakes in
+  an SSH key (generating `~/.ssh/id_ed25519.pub` if absent), routes the cloud-image
+  import to a file-based storage, resizes the disk, and boots. `--from-template
+  <vmid>` clones an existing template (e.g. one with the guest agent baked in)
+  through the same flow; `--image` imports a cloud image; `--ip` sets an explicit
+  static address. Exactly one of `--image` / `--from-template` is required.
+- `[network]` config table (`cidr`, `gateway`, `pool`, `nameserver`) and a
+  `[defaults]` table (`import_storage`, `ssh_key`, `ciuser`), read from a TOML
+  config file or `PROXMOX_NET_*` / `PROXMOX_DEFAULT_*` environment variables. Used
+  by `vm up` for static-IP auto-allocation; entirely optional (DHCP otherwise).
+- `vm ip`: when the QEMU guest agent is unavailable, fall back to the static IP
+  declared in the guest's cloud-init `ipconfigN` config (`source: "config"`), so
+  statically addressed VMs report their IP without an agent.
+- `--import-storage` option on `vm new` / `vm up` to choose the storage that holds
+  an imported cloud image (auto-detected when omitted).
+- New internal `ipam` module: token-only static IPv4 allocation using the
+  cluster's own static `ipconfigN` as the ledger (no local state file).
+
+### Fixed
+
+- `vm new --image <catalog|url>` no longer fails with `can't upload to storage
+  type 'lvmthin', not a file based storage!` when the disk storage is LVM-thin:
+  the cloud-image import is now auto-routed to a file-based storage that has the
+  `import` content type, separate from the (block) disk storage.
+
 ## [0.3.0] - 2026-06-07
 
 ### Added
