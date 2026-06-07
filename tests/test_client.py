@@ -244,3 +244,23 @@ def test_download_appliance(client, api):
     api.nodes.return_value.aplinfo.post.assert_called_once_with(
         storage="local", template="ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
     )
+
+
+def test_agent_network_interfaces(client, api):
+    guest = api.nodes.return_value.qemu.return_value
+    getattr(guest.agent, "network-get-interfaces").get.return_value = {"result": [{"name": "eth0"}]}
+    out = client.agent_network_interfaces("pve1", 100)
+    assert out == {"result": [{"name": "eth0"}]}
+    api.nodes.assert_called_with("pve1")
+    api.nodes.return_value.qemu.assert_called_with(100)
+    getattr(guest.agent, "network-get-interfaces").get.assert_called_once_with()
+
+
+def test_lxc_interfaces(client, api):
+    guest = api.nodes.return_value.lxc.return_value
+    guest.interfaces.get.return_value = [{"name": "eth0", "inet": "10.0.0.5/24"}]
+    out = client.lxc_interfaces("pve2", 200)
+    assert out == [{"name": "eth0", "inet": "10.0.0.5/24"}]
+    api.nodes.assert_called_with("pve2")
+    api.nodes.return_value.lxc.assert_called_with(200)
+    guest.interfaces.get.assert_called_once_with()

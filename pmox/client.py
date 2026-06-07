@@ -75,6 +75,19 @@ class ProxmoxClient:
     def guest_config(self, node: str, kind: str, vmid) -> dict:
         return self._guest(node, kind, vmid).config.get()
 
+    def agent_network_interfaces(self, node: str, vmid) -> Any:
+        """QEMU guest-agent network interfaces (needs the agent running in the guest).
+
+        The hyphenated path segment ``network-get-interfaces`` isn't a valid Python
+        identifier, so it's addressed via ``getattr`` (same as ``download-url``).
+        """
+        agent = self._guest(node, "qemu", vmid).agent
+        return getattr(agent, "network-get-interfaces").get()
+
+    def lxc_interfaces(self, node: str, vmid) -> list:
+        """Network interfaces of a running LXC container (no guest agent needed)."""
+        return self._guest(node, "lxc", vmid).interfaces.get()
+
     def update_config(self, node: str, kind: str, vmid, **params) -> Any:
         """Set/update guest options (synchronous PUT on the config endpoint)."""
         return self._guest(node, kind, vmid).config.put(**params)
