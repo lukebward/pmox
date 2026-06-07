@@ -193,6 +193,79 @@ def build_vm_clone_plan(
     return plan
 
 
+def _resolve_appliance(client, node, template_storage, template):
+    """Return (ostemplate_volid, download_step_or_None) for a CT template name/volid."""
+    if ":vztmpl/" in template:
+        return template, None
+    matches = [a for a in client.list_appliances(node) if template in a.get("template", "")]
+    if not matches:
+        raise LookupError(f"No container template matching {template!r} available on {node}.")
+    filename = matches[0]["template"]
+    volid = f"{template_storage}:vztmpl/{filename}"
+    present = any(c.get("volid") == volid for c in client.storage_content(node, template_storage))
+    if present:
+        return volid, None
+    download = step(
+        "download_appliance",
+        {"node": node, "storage": template_storage, "template": filename},
+        await_task=True,
+        describe=f"download template {filename}",
+    )
+    return volid, download
+
+
+def build_ct_plan(
+    client,
+    *,
+    node,
+    vmid,
+    hostname,
+    template,
+    storage,
+    template_storage,
+    disk,
+    cores,
+    memory,
+    sshkeys=None,
+    ip="dhcp",
+    password=None,
+    start=True,
+) -> list:
+    """Build the ordered plan for creating a ready-to-use LXC container."""
+    ostemplate, download = _resolve_appliance(client, node, template_storage, template)
+    plan = []
+    if download:
+        plan.append(download)
+
+    create_args = {
+        "node": node,
+        "kind": "lxc",
+        "vmid": vmid,
+        "ostemplate": ostemplate,
+        "rootfs": f"{storage}:{disk}",
+        "cores": cores,
+        "memory": memory,
+        "net0": f"name=eth0,bridge=vmbr0,ip={ip}",
+        "unprivileged": 1,
+    }
+    if hostname:
+        create_args["hostname"] = hostname
+    if sshkeys:
+        create_args["ssh-public-keys"] = sshkeys
+    if password:
+        create_args["password"] = password
+    plan.append(step("create_guest", create_args, await_task=True, describe=f"create CT {vmid}"))
+
+    if start:
+        plan.append(step(
+            "guest_power",
+            {"node": node, "kind": "lxc", "vmid": vmid, "action": "start"},
+            await_task=True,
+            describe="start",
+        ))
+    return plan
+
+
 def build_template_plan(client, *, node, vmid, name, storage, image, cores=1, memory=1024) -> list:
     """Build a golden cloud-init template: import the image + cloud-init drive, then convert."""
     plan = build_vm_image_plan(

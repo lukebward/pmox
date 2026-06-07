@@ -1,3 +1,4 @@
+import pytest
 from unittest.mock import MagicMock
 
 from pmox import provision
@@ -166,3 +167,69 @@ def test_build_template_plan_cached_image():
     c.storage_content.return_value = [{"volid": "local:import/noble-server-cloudimg-amd64.qcow2"}]
     plan = provision.build_template_plan(c, node="p1", vmid=9000, name=None, storage="local", image="ubuntu-24.04")
     assert [s["op"] for s in plan] == ["create_guest", "convert_to_template"]
+
+
+def _appliance_client(appliances=None, present_volids=()):
+    c = MagicMock()
+    c.list_appliances.return_value = appliances if appliances is not None else [
+        {"template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"},
+    ]
+    c.storage_content.return_value = [{"volid": v} for v in present_volids]
+    return c
+
+
+def test_build_ct_plan_downloads_and_creates():
+    c = _appliance_client()
+    plan = provision.build_ct_plan(
+        c, node="p1", vmid=300, hostname="box", template="ubuntu-24.04",
+        storage="local-lvm", template_storage="local", disk=8, cores=1, memory=1024,
+        sshkeys="ssh-ed25519 AAAA u@h", ip="dhcp", password=None, start=True,
+    )
+    assert [s["op"] for s in plan] == ["download_appliance", "create_guest", "guest_power"]
+    dl = plan[0]["args"]
+    assert dl == {"node": "p1", "storage": "local", "template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"}
+    create = plan[1]["args"]
+    assert create["node"] == "p1" and create["kind"] == "lxc" and create["vmid"] == 300
+    assert create["ostemplate"] == "local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
+    assert create["rootfs"] == "local-lvm:8"
+    assert create["net0"] == "name=eth0,bridge=vmbr0,ip=dhcp"
+    assert create["hostname"] == "box"
+    assert create["ssh-public-keys"] == "ssh-ed25519 AAAA u@h"  # LXC takes raw keys (proxmoxer form-encodes)
+    assert create["unprivileged"] == 1
+    assert "password" not in create
+
+
+def test_build_ct_plan_cached_template_and_password_static_ip():
+    c = _appliance_client(present_volids=["local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst"])
+    plan = provision.build_ct_plan(
+        c, node="p1", vmid=300, hostname=None, template="ubuntu-24.04",
+        storage="local-lvm", template_storage="local", disk=8, cores=2, memory=2048,
+        sshkeys=None, ip="10.0.0.9/24,gw=10.0.0.1", password="s3cret", start=False,
+    )
+    assert [s["op"] for s in plan] == ["create_guest"]  # cached → no download; start=False → no power
+    create = plan[0]["args"]
+    assert create["net0"] == "name=eth0,bridge=vmbr0,ip=10.0.0.9/24,gw=10.0.0.1"
+    assert create["password"] == "s3cret"
+    assert "ssh-public-keys" not in create and "hostname" not in create
+
+
+def test_build_ct_plan_explicit_volid_template():
+    c = _appliance_client()
+    plan = provision.build_ct_plan(
+        c, node="p1", vmid=300, hostname=None, template="local:vztmpl/custom.tar.zst",
+        storage="local-lvm", template_storage="local", disk=8, cores=1, memory=1024,
+        sshkeys=None, ip="dhcp", password=None, start=False,
+    )
+    assert [s["op"] for s in plan] == ["create_guest"]  # explicit volid → no aplinfo lookup, no download
+    c.list_appliances.assert_not_called()
+    assert plan[0]["args"]["ostemplate"] == "local:vztmpl/custom.tar.zst"
+
+
+def test_build_ct_plan_unknown_template_raises():
+    c = _appliance_client(appliances=[{"template": "debian-12-standard_12.7-1_amd64.tar.zst"}])
+    with pytest.raises(LookupError):
+        provision.build_ct_plan(
+            c, node="p1", vmid=300, hostname=None, template="ubuntu-24.04",
+            storage="local-lvm", template_storage="local", disk=8, cores=1, memory=1024,
+            sshkeys=None, ip="dhcp", password=None, start=False,
+        )
