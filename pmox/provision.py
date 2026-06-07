@@ -146,3 +146,48 @@ def build_vm_image_plan(
             )
         )
     return plan
+
+
+def build_vm_clone_plan(
+    client,
+    *,
+    node,
+    template_id,
+    newid,
+    name,
+    disk,
+    sshkeys=None,
+    ipconfig=None,
+    ciuser=None,
+    cipassword=None,
+    nameserver=None,
+    full=True,
+    start=True,
+) -> list:
+    """Build the plan for cloning a template into a ready-to-SSH VM."""
+    clone_args = {"node": node, "kind": "qemu", "vmid": template_id, "newid": newid}
+    if name:
+        clone_args["name"] = name
+    if full:
+        clone_args["full"] = 1
+    plan = [step("clone_guest", clone_args, await_task=True, describe=f"clone {template_id} -> {newid}")]
+
+    ci = {}
+    if sshkeys:
+        ci["sshkeys"] = encode_sshkeys(sshkeys)
+    if ipconfig:
+        ci["ipconfig0"] = ipconfig
+    if ciuser:
+        ci["ciuser"] = ciuser
+    if cipassword:
+        ci["cipassword"] = cipassword
+    if nameserver:
+        ci["nameserver"] = nameserver
+    if ci:
+        plan.append(step("update_config", {"node": node, "kind": "qemu", "vmid": newid, **ci}, await_task=False, describe="set cloud-init"))
+
+    if disk:
+        plan.append(step("resize_disk", {"node": node, "kind": "qemu", "vmid": newid, "disk": "scsi0", "size": f"{disk}G"}, await_task=False, describe=f"grow scsi0 to {disk}G"))
+    if start:
+        plan.append(step("guest_power", {"node": node, "kind": "qemu", "vmid": newid, "action": "start"}, await_task=True, describe="start"))
+    return plan

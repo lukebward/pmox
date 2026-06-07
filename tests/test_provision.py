@@ -103,3 +103,42 @@ def test_build_vm_image_plan_cipassword_and_nameserver():
     create = next(s for s in plan if s["op"] == "create_guest")["args"]
     assert create["cipassword"] == "s3cr3t"
     assert create["nameserver"] == "8.8.8.8"
+
+
+def test_build_vm_clone_plan_full():
+    plan = provision.build_vm_clone_plan(
+        MagicMock(), node="p1", template_id=9000, newid=120, name="web", disk=40,
+        sshkeys="ssh-ed25519 AAAA u@h", ipconfig="ip=dhcp", ciuser="ubuntu",
+        cipassword=None, nameserver=None, full=True, start=True,
+    )
+    assert [s["op"] for s in plan] == ["clone_guest", "update_config", "resize_disk", "guest_power"]
+    clone = plan[0]["args"]
+    assert clone == {"node": "p1", "kind": "qemu", "vmid": 9000, "newid": 120, "name": "web", "full": 1}
+    assert plan[0]["await_task"] is True
+    ci = plan[1]["args"]
+    assert ci["sshkeys"] == provision.encode_sshkeys("ssh-ed25519 AAAA u@h")
+    assert ci["ipconfig0"] == "ip=dhcp" and ci["ciuser"] == "ubuntu"
+    assert ci["node"] == "p1" and ci["vmid"] == 120
+    assert plan[1]["await_task"] is False  # config PUT is synchronous
+
+
+def test_build_vm_clone_plan_minimal():
+    plan = provision.build_vm_clone_plan(
+        MagicMock(), node="p1", template_id=9000, newid=120, name=None, disk=None,
+        sshkeys=None, ipconfig=None, ciuser=None, cipassword=None, nameserver=None,
+        full=False, start=False,
+    )
+    assert [s["op"] for s in plan] == ["clone_guest"]  # no ci → no update; no disk; no start
+    assert "full" not in plan[0]["args"] and "name" not in plan[0]["args"]
+
+
+def test_build_vm_clone_plan_cipassword_and_nameserver():
+    plan = provision.build_vm_clone_plan(
+        MagicMock(), node="p1", template_id=9000, newid=120, name=None, disk=None,
+        sshkeys=None, ipconfig=None, ciuser=None, cipassword="s3cr3t", nameserver="8.8.8.8",
+        full=False, start=False,
+    )
+    assert [s["op"] for s in plan] == ["clone_guest", "update_config"]
+    ci = plan[1]["args"]
+    assert ci["cipassword"] == "s3cr3t"
+    assert ci["nameserver"] == "8.8.8.8"
