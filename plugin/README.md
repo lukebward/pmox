@@ -30,8 +30,16 @@ path to the repo root, where `.claude-plugin/marketplace.json` lives.)
 ## What you get
 
 - **Skill `proxmox`** — auto-activates when you ask about your cluster, VMs,
-  containers, nodes, storage, or snapshots. Claude runs `pmox` for you, staying
-  read-only unless you explicitly ask for a change.
+  containers, nodes, storage, or snapshots. The skill covers:
+  - **Health and triage** — `pmox health` for a one-shot cluster overview.
+  - **Describe** — `pmox vm describe <id>` / `pmox ct describe <id>` for a
+    consolidated view of any guest (status, config, snapshots, recent tasks).
+  - **Edit** — set config keys, resize disks, rename guests, manage tags.
+  - **Provisioning** — one-call cloud-init VMs (`vm new --image`), ready
+    containers (`ct new --template`), and golden templates (`image pull
+    --as-template`).
+  Claude runs `pmox` for you, staying read-only unless you explicitly ask for a
+  change.
 - **`/pmox:cluster-status`** — quick health overview of the whole cluster.
 - **`/pmox:list-guests [running|stopped]`** — list all VMs and containers.
 - **`/pmox:run <args>`** — run any pmox command and have Claude interpret it.
