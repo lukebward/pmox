@@ -1521,6 +1521,74 @@ def test_vm_up_dhcp_human_output(fake_client, creds, tmp_path, monkeypatch):
     assert "DHCP" in r.output
 
 
+def test_vm_up_from_template_clones(fake_client, creds, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("ssh-ed25519 AAAA u@h")
+    fake_client.resolve_node.return_value = "pve1"
+    fake_client.cluster_nextid.return_value = "150"
+    fake_client.cluster_resources.return_value = []  # pool free -> .200
+    fake_client.clone_guest.return_value = "UPID:clone"
+    fake_client.update_config.return_value = "UPID:cfg"
+    fake_client.guest_power.return_value = "UPID:start"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--dangerous", "vm", "up", "web", "--from-template", "9000",
+             "--ssh-key", str(key), "--ciuser", "ubuntu"], _net_creds(creds))
+    assert r.exit_code == 0, r.output
+    fake_client.clone_guest.assert_called_once()
+    fake_client.resolve_node.assert_called_with(9000)  # node from the template
+    cfg = fake_client.update_config.call_args.kwargs
+    assert cfg["ipconfig0"] == "ip=192.168.0.200/24,gw=192.168.0.1"
+    assert "sshkeys" in cfg
+    assert "192.168.0.200" in r.output
+
+
+def test_vm_up_from_template_dhcp(fake_client, creds, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("ssh-ed25519 AAAA u@h")
+    fake_client.resolve_node.return_value = "pve1"
+    fake_client.cluster_nextid.return_value = "150"
+    fake_client.clone_guest.return_value = "UPID:clone"
+    fake_client.update_config.return_value = "UPID:cfg"
+    fake_client.guest_power.return_value = "UPID:start"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    # plain creds (no [network] pool) and no --ip -> DHCP
+    r = inv(["--dangerous", "vm", "up", "web", "--from-template", "9000", "--ssh-key", str(key)], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.cluster_resources.assert_not_called()  # no static allocation
+    assert fake_client.update_config.call_args.kwargs["ipconfig0"] == "ip=dhcp"
+
+
+def test_vm_up_from_template_unresolvable_errors(fake_client, creds, tmp_path):
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("ssh-ed25519 AAAA u@h")
+    fake_client.cluster_nextid.return_value = "150"
+    fake_client.resolve_node.return_value = None  # template not found
+    r = inv(["--dangerous", "vm", "up", "web", "--from-template", "9000", "--ssh-key", str(key)], creds)
+    assert r.exit_code == 1, r.output
+    fake_client.clone_guest.assert_not_called()
+
+
+def test_vm_up_requires_image_or_template(fake_client, creds, tmp_path):
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("ssh-ed25519 AAAA u@h")
+    r = inv(["--dangerous", "vm", "up", "web", "--ssh-key", str(key)], creds)  # neither source
+    assert r.exit_code == 1, r.output
+    fake_client.create_guest.assert_not_called()
+    fake_client.clone_guest.assert_not_called()
+
+
+def test_vm_up_image_and_template_mutually_exclusive(fake_client, creds, tmp_path):
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("ssh-ed25519 AAAA u@h")
+    r = inv(["--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04",
+             "--from-template", "9000", "--ssh-key", str(key)], creds)
+    assert r.exit_code == 1, r.output
+    fake_client.create_guest.assert_not_called()
+    fake_client.clone_guest.assert_not_called()
+
+
 def test_vm_up_dry_run(fake_client, creds, tmp_path):
     key = tmp_path / "id_ed25519.pub"
     key.write_text("ssh-ed25519 AAAA u@h")

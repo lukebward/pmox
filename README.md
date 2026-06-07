@@ -221,6 +221,24 @@ gateway = "192.168.0.1"
 pool = "192.168.0.200-192.168.0.250"   # MUST be outside your DHCP scope
 ```
 
+**Want a known IP on a DHCP VM?** Clone a template that already runs
+`qemu-guest-agent` — the agent then reports the address, so no static IP or pool
+is needed:
+
+```
+pmox --dangerous vm up web --from-template 9000 --wait
+pmox vm ip <vmid>      # returns the DHCP-assigned address via the agent
+```
+
+Build that agent template once (pmox stays token-only, so this part is yours):
+
+```
+pmox --dangerous vm up base --image ubuntu-24.04 --ip 192.168.0.250/24,gw=192.168.0.1 --wait
+ssh ubuntu@192.168.0.250 "sudo apt-get update && sudo apt-get install -y qemu-guest-agent && sudo systemctl enable --now qemu-guest-agent"
+pmox --dangerous --yes vm stop <vmid>
+#   then convert it to a template: Proxmox UI -> Convert to template, or `qm template <vmid>` on the node
+```
+
 ### Clone from a template (`vm new --from-template`)
 
 ```bash

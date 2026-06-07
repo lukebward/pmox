@@ -916,8 +916,9 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
         def _up(
             ctx: typer.Context,
             name: str = typer.Argument(..., help="VM name."),
-            image: str = typer.Option(..., "--image", help="Cloud image: catalog name, https URL, or import volid."),
-            size: str = typer.Option("small", "--size", help="Sizing profile: small | medium | large."),
+            image: Optional[str] = typer.Option(None, "--image", help="Cloud image: catalog name, https URL, or import volid."),
+            from_template: Optional[int] = typer.Option(None, "--from-template", help="Clone an existing template VMID instead of importing an image."),
+            size: str = typer.Option("small", "--size", help="Sizing profile: small | medium | large (ignored with --from-template)."),
             disk: Optional[int] = typer.Option(None, "--disk", help="Disk size in GiB."),
             node: Optional[str] = typer.Option(None, "--node", "-n", help="Node (auto-picked if one node)."),
             storage: str = typer.Option("local-lvm", "--storage", help="Storage for the disk/cloud-init."),
@@ -931,9 +932,23 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
             with error_boundary(ctx.obj.json):
                 client = _get_client(ctx)
                 settings = ctx.obj.settings
-                target_node = node or _single_node_or_die(client)
+                if (image is None) == (from_template is None):
+                    raise ValueError("vm up needs exactly one of --image or --from-template.")
                 target_vmid = vmid if vmid is not None else int(client.cluster_nextid())
                 profile = catalog.size_params(size)
+
+                if from_template is not None:
+                    target_node = node or client.resolve_node(from_template)
+                    if not target_node:
+                        raise LookupError(f"Could not locate template {from_template} in the cluster.")
+                    resolved_import = None
+                else:
+                    target_node = node or _single_node_or_die(client)
+                    needs_import = catalog.resolve_image(image)["kind"] != "volid"
+                    resolved_import = (
+                        provision.resolve_import_storage(client, target_node, import_storage or settings.default_import_storage)
+                        if needs_import else None
+                    )
 
                 if ip:
                     ipconfig = provision.build_ipconfig(ip)
@@ -949,18 +964,19 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                     ipconfig = provision.build_ipconfig("dhcp")
                     chosen_ip = None
 
-                needs_import = catalog.resolve_image(image)["kind"] != "volid"
-                resolved_import = (
-                    provision.resolve_import_storage(client, target_node, import_storage or settings.default_import_storage)
-                    if needs_import else None
-                )
-
                 key_path = None
                 if not no_ssh_key:
                     key_path = ssh_key or settings.default_ssh_key or str(Path.home() / ".ssh" / "id_ed25519.pub")
                 chosen_ciuser = ciuser or settings.default_ciuser
 
                 def _build(sshkeys):
+                    if from_template is not None:
+                        return provision.build_vm_clone_plan(
+                            client, node=target_node, template_id=from_template, newid=target_vmid,
+                            name=name, disk=disk, sshkeys=sshkeys, ipconfig=ipconfig,
+                            ciuser=chosen_ciuser, cipassword=None, nameserver=settings.net_nameserver,
+                            full=True, start=True,
+                        )
                     return provision.build_vm_image_plan(
                         client, node=target_node, vmid=target_vmid, name=name,
                         cores=profile["cores"], memory=profile["memory"], disk=disk,

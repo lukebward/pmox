@@ -157,6 +157,12 @@ pool (`cidr`/`gateway`/`pool`, outside your DHCP scope) so pmox auto-allocates a
 free address — then `pmox vm ip <vmid>` returns it immediately from cloud-init
 config, no guest agent needed.
 
+To get a **DHCP** VM's IP via the guest agent instead, clone a template that has
+`qemu-guest-agent` baked in: `pmox --dangerous vm up web --from-template <vmid>`
+(mutually exclusive with `--image`; the clone inherits the template's hardware).
+pmox can't install the agent (token-only), so build that template once yourself
+(boot a base VM, `apt install qemu-guest-agent`, convert it to a template).
+
 ### Ready container (ready to SSH)
 
 ```
@@ -298,7 +304,7 @@ pmox --dangerous vm new <name> [--image <name|url|volid>] [--from-template <vmid
                                 [--ssh-key <path>] [--ip dhcp|<cidr>,gw=<ip>]
                                 [--ciuser <u>] [--cipassword <p>] [--nameserver <dns>]
                                 [-o key=value] [--wait] [--dry-run]
-pmox --dangerous vm up <name> --image <name|url|volid>
+pmox --dangerous vm up <name> (--image <name|url|volid> | --from-template <vmid>)
                                [--size ...] [--disk <GiB>] [--node <node>]
                                [--storage <disk>] [--import-storage <storage>]
                                [--ip <cidr>,gw=<ip>] [--ssh-key <path>] [--no-ssh-key]
