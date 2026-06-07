@@ -975,15 +975,12 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 require_dangerous(ctx.obj.dangerous)
                 provision.execute_plan(client, target_node, plan, waiter=lambda n, upid: _maybe_wait(ctx, n, upid))
 
-                if chosen_ciuser:
-                    ssh_hint = f"ssh {chosen_ciuser}@{chosen_ip}"
-                else:
-                    ssh_hint = f"ssh <image's default user>@{chosen_ip}"
                 if ctx.obj.json:
-                    emit({"vmid": target_vmid, "name": name, "node": target_node, "ip": chosen_ip, "ssh": ssh_hint}, json_output=True)
+                    ssh_val = f"ssh {chosen_ciuser}@{chosen_ip}" if chosen_ciuser else None
+                    emit({"vmid": target_vmid, "name": name, "node": target_node, "ip": chosen_ip, "ssh": ssh_val}, json_output=True)
                 else:
                     console.print(f"VM {target_vmid}  {name}  ip {chosen_ip}")
-                    console.print(ssh_hint)
+                    console.print(f"ssh {chosen_ciuser}@{chosen_ip}" if chosen_ciuser else f"ssh <image's default user>@{chosen_ip}")
 
     if kind == "lxc":
 

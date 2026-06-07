@@ -1484,7 +1484,9 @@ def test_vm_up_explicit_ip_skips_allocation(fake_client, creds, tmp_path, monkey
     assert r.exit_code == 0, r.output
     fake_client.cluster_resources.assert_not_called()
     assert fake_client.create_guest.call_args.kwargs["ipconfig0"] == "ip=192.168.0.77/24,gw=192.168.0.1"
-    assert "192.168.0.77" in r.output and "image's default user" in r.output
+    out = json.loads(r.output)
+    assert out["ip"] == "192.168.0.77"
+    assert out["ssh"] is None  # no ciuser -> JSON ssh is null; human output prints a placeholder instead
 
 
 def test_vm_up_no_pool_configured_errors(fake_client, creds, tmp_path):
