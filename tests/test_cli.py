@@ -957,9 +957,50 @@ def test_vm_new_dry_run(fake_client, creds):
     fake_client.create_guest.assert_not_called()
 
 
-def test_ct_has_no_new(fake_client, creds):
-    r = inv(["ct", "new", "box"], creds)
-    assert r.exit_code != 0  # no such command for containers
+def test_ct_new_creates_container(fake_client, creds, tmp_path, monkeypatch):
+    import pmox.cli as cli
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    key = tmp_path / "id.pub"
+    key.write_text("ssh-ed25519 AAAA user@host")
+    fake_client.list_appliances.return_value = [{"template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"}]
+    fake_client.storage_content.return_value = []
+    fake_client.download_appliance.return_value = "UPID:apl"
+    fake_client.create_guest.return_value = "UPID:create"
+    fake_client.guest_power.return_value = "UPID:start"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--dangerous", "ct", "new", "box", "--template", "ubuntu-24.04", "--node", "pve1",
+             "--vmid", "300", "--disk", "8", "--ssh-key", str(key), "--ip", "dhcp"], creds)
+    assert r.exit_code == 0, r.output
+    create_kwargs = fake_client.create_guest.call_args.kwargs
+    assert create_kwargs["ostemplate"] == "local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
+    assert create_kwargs["rootfs"] == "local-lvm:8"
+    assert create_kwargs["ssh-public-keys"] == "ssh-ed25519 AAAA user@host"
+    assert create_kwargs["hostname"] == "box"
+
+
+def test_ct_new_dry_run(fake_client, creds):
+    fake_client.list_appliances.return_value = [{"template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"}]
+    fake_client.storage_content.return_value = []
+    r = inv(["--dry-run", "ct", "new", "box", "--template", "ubuntu-24.04", "--node", "pve1", "--vmid", "300"], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["op"] == "lxc.new"
+    assert payload["plan"][-1]["op"] in {"create_guest", "guest_power"}
+    fake_client.create_guest.assert_not_called()
+
+
+def test_ct_new_needs_dangerous(fake_client, creds):
+    fake_client.list_appliances.return_value = [{"template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"}]
+    fake_client.storage_content.return_value = []
+    r = inv(["ct", "new", "box", "--template", "ubuntu-24.04", "--node", "pve1", "--vmid", "300"], creds)
+    assert r.exit_code == 4, r.output
+    fake_client.create_guest.assert_not_called()
+
+
+def test_vm_has_no_ct_template_option(fake_client, creds):
+    # `vm new` must NOT accept --template (that's ct-only)
+    r = inv(["--dangerous", "vm", "new", "web", "--template", "ubuntu-24.04", "--node", "pve1", "--vmid", "300"], creds)
+    assert r.exit_code != 0
 
 
 # ------------------------------------------------- Task 5 (C1): vm new --image cloud-init mode --

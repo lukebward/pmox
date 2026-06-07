@@ -839,6 +839,52 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                     params={"vmid": target_vmid, **params},
                 )
 
+    if kind == "lxc":
+
+        @group.command("new", help="Create an LXC container from a template, ready to SSH.")
+        def _ct_new(
+            ctx: typer.Context,
+            name: Optional[str] = typer.Argument(None, help="Hostname (optional)."),
+            template: str = typer.Option(..., "--template", help="Template: catalog/aplinfo name or a vztmpl volid."),
+            size: str = typer.Option("small", "--size", help="Sizing profile: small | medium | large."),
+            disk: int = typer.Option(8, "--disk", help="Root filesystem size in GiB."),
+            storage: str = typer.Option("local-lvm", "--storage", help="Storage for the rootfs."),
+            template_storage: str = typer.Option("local", "--template-storage", help="Storage to download the template into (vztmpl)."),
+            node: Optional[str] = typer.Option(None, "--node", "-n", help="Node (auto-picked if one node)."),
+            vmid: Optional[int] = typer.Option(None, "--vmid", help="VMID (auto-assigned if omitted)."),
+            ssh_key: Optional[List[str]] = typer.Option(None, "--ssh-key", help="Path to an SSH public key file (repeatable)."),
+            ip: str = typer.Option("dhcp", "--ip", help="dhcp or <cidr>,gw=<ip>."),
+            password: Optional[str] = typer.Option(None, "--password", help="Root password."),
+        ):
+            with error_boundary(ctx.obj.json):
+                client = _get_client(ctx)
+                target_node = node or _single_node_or_die(client)
+                target_vmid = vmid if vmid is not None else int(client.cluster_nextid())
+                profile = catalog.size_params(size)
+                sshkeys = "\n".join(Path(p).read_text().strip() for p in (ssh_key or [])) or None
+                plan = provision.build_ct_plan(
+                    client,
+                    node=target_node,
+                    vmid=target_vmid,
+                    hostname=name,
+                    template=template,
+                    storage=storage,
+                    template_storage=template_storage,
+                    disk=disk,
+                    cores=profile["cores"],
+                    memory=profile["memory"],
+                    sshkeys=sshkeys,
+                    ip=ip,
+                    password=password,
+                    start=True,
+                )
+                if ctx.obj.dry_run:
+                    print(json.dumps({"dry_run": True, "op": "lxc.new", "node": target_node, "plan": plan}, default=str, indent=2))
+                    return
+                require_dangerous(ctx.obj.dangerous)
+                provision.execute_plan(client, target_node, plan, waiter=lambda n, upid: _maybe_wait(ctx, n, upid))
+                _ok(ctx, f"Created container {target_vmid} on {target_node} from {template}")
+
     @group.command("clone")
     def _clone(
         ctx: typer.Context,
