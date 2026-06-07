@@ -6,6 +6,8 @@ All notable changes to pmox are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-07
+
 ### Added
 
 - `vm ip` / `ct ip`: read a guest's live IP address(es) — VMs via the QEMU
@@ -76,6 +78,7 @@ Initial release.
 - Claude Code plugin (`plugin/`) with a `proxmox` skill and the
   `/pmox:cluster-status`, `/pmox:list-guests`, and `/pmox:run` commands.
 
-[Unreleased]: https://github.com/lukebward/pmox/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/lukebward/pmox/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/lukebward/pmox/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/lukebward/pmox/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/lukebward/pmox/releases/tag/v0.1.0
