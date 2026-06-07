@@ -127,6 +127,14 @@ class ProxmoxClient:
     def storage_content(self, node: str, storage: str) -> list:
         return self._api.nodes(node).storage(storage).content.get()
 
+    def list_appliances(self, node: str) -> list:
+        """List downloadable appliance/container templates available to a node."""
+        return self._api.nodes(node).aplinfo.get()
+
+    def download_appliance(self, node: str, storage: str, template: str) -> Any:
+        """Download a container template to a vztmpl storage (async; returns a UPID)."""
+        return self._api.nodes(node).aplinfo.post(storage=storage, template=template)
+
     def download_url(
         self,
         node: str,

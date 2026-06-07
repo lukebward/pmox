@@ -227,3 +227,20 @@ def test_download_url_without_checksum(client, api):
 def test_convert_to_template(client, api):
     client.convert_to_template("pve1", "qemu", 9000)
     api.nodes.return_value.qemu.return_value.template.post.assert_called_once_with()
+
+
+def test_list_appliances(client, api):
+    api.nodes.return_value.aplinfo.get.return_value = [{"template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"}]
+    out = client.list_appliances("pve1")
+    assert out == [{"template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"}]
+    api.nodes.assert_called_with("pve1")
+    api.nodes.return_value.aplinfo.get.assert_called_once_with()
+
+
+def test_download_appliance(client, api):
+    api.nodes.return_value.aplinfo.post.return_value = "UPID:apl"
+    out = client.download_appliance("pve1", "local", "ubuntu-24.04-standard_24.04-2_amd64.tar.zst")
+    assert out == "UPID:apl"
+    api.nodes.return_value.aplinfo.post.assert_called_once_with(
+        storage="local", template="ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
+    )
