@@ -117,9 +117,15 @@ pmox cluster resources                   # cluster-wide resource view
 pmox cluster resources --type vm         # filter: vm | node | storage | sdn | pool
 pmox vm describe <vmid>                  # consolidated: status + config + snapshots + tasks
 pmox ct describe <vmid>                  # same for containers
+pmox vm ip <vmid>                        # live IP(s): VM via guest agent, CT via interfaces
+pmox ct ip <vmid>                        # (--all adds loopback, link-local, MACs)
 pmox image list                          # VM cloud image catalog
 pmox image list --ct --node <node>       # LXC container templates on a node
 ```
+
+> `vm ip` reads the live address from the QEMU guest agent, so the guest needs
+> `qemu-guest-agent` running and `agent: 1` set (cloud-init VMs from `vm new`
+> already enable `agent: 1`). `ct ip` needs no agent.
 
 ## Recipes
 
@@ -257,6 +263,8 @@ pmox vm config <vmid>
 pmox ct config <vmid>
 pmox vm describe <vmid>
 pmox ct describe <vmid>
+pmox vm ip <vmid> [--all] [--node <node>]
+pmox ct ip <vmid> [--all] [--node <node>]
 pmox vm snapshot list <vmid>
 pmox ct snapshot list <vmid>
 pmox storage list

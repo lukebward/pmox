@@ -6,6 +6,13 @@ All notable changes to pmox are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `vm ip` / `ct ip`: read a guest's live IP address(es) — VMs via the QEMU
+  guest agent, containers via the LXC interfaces endpoint. Filtered by default
+  (`--all` adds loopback, IPv6 link-local, and MACs); JSON returns the full
+  per-interface data. The same info now also appears in `describe`.
+
 ## [0.2.0] - 2026-06-06
 
 ### Added

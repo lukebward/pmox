@@ -127,6 +127,7 @@ pmox vm list [--node N]              QEMU VMs (cluster-wide)
 pmox vm status <vmid>                live status (node auto-resolved)
 pmox vm config <vmid>                raw configuration
 pmox vm describe <vmid>              consolidated view: status + config + snapshots + tasks
+pmox vm ip <vmid> [--all]            live IP(s) from the guest agent (--all: loopback/link-local/MAC)
 
 pmox vm set <vmid> -o key=val        update config (needs --dangerous; delete=key needs --yes)
 pmox vm resize <vmid> --disk D --size [+]G    grow a disk (needs --dangerous)
@@ -231,6 +232,23 @@ pmox --dangerous vm new web --from-template <id> --ssh-key ~/.ssh/id_ed25519.pub
 
 `--as-template` conversion is **one-way**. Same PVE 8.2+/`import` content-type
 requirements apply.
+
+### Finding a guest's IP (`vm ip` / `ct ip`)
+
+After creating a DHCP guest, read the address it actually got:
+
+```bash
+pmox vm ip 100              # primary IP + per-interface table
+pmox vm ip 100 --all        # also show loopback, IPv6 link-local, and MACs
+pmox ct ip 200              # same for containers
+```
+
+For VMs this reads the live interfaces from the **QEMU guest agent**, so the
+guest needs `qemu-guest-agent` installed and running and `agent: 1` set —
+cloud-init VMs from `vm new` already enable `agent: 1`. Containers report their
+interfaces directly, so `ct ip` needs no agent. JSON output (the default when
+piped) carries every interface and address; the table view hides loopback and
+link-local unless you pass `--all`.
 
 ## Using with an AI (e.g. Claude)
 
