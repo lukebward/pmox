@@ -39,8 +39,10 @@ All notable changes to pmox are recorded here. The format follows
 - `--dry-run`: print the intended API call as JSON and exit; performs no
   mutations (read API calls still execute for cluster connectivity).
 - Machine-readable JSON error envelope under `--json`:
-  `{"ok": false, "error": "...", "need": [...], "message": "..."}`. The `need`
-  array lists missing gates (`dangerous`, `yes`) for programmatic branching.
+  `{"ok": false, "error": "read_only", "need": ["--dangerous"], "message": "..."}`.
+  `error` is one of `read_only` (4), `confirm_required` (3), `config` (2), `error`
+  (1); the `need` array (present only for `read_only`/`confirm_required`) lists the
+  flag to add (`--dangerous` or `--yes`).
 - New internal modules: `catalog` (cloud-image and container-template
   catalogue), `views` (consolidated describe output), `provision` (VM/CT
   creation and cloud-init wiring).
