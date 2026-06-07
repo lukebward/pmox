@@ -30,7 +30,9 @@ def size_params(size: str) -> dict:
 
 # VM cloud images by short name. `filename` ends in .qcow2 because Proxmox's
 # `import` content type recognises disk images by extension (an Ubuntu .img is a
-# qcow2). Checksums are optional in v1 (a warning is printed when absent) and
+# qcow2). In v1, when a checksum is absent the image downloads over HTTPS with
+# no content-checksum verification and no warning; provide a checksum or use
+# `--image <url>` from a trusted source for verification. URLs and checksums
 # need periodic refresh; the --image <url|volid> escape hatch avoids hard
 # dependence on this table.
 IMAGE_CATALOG = {

@@ -569,6 +569,17 @@ def test_maybe_wait_times_out(monkeypatch):
         cli._maybe_wait(ctx, "pve1", "UPID:pve1:0001")
 
 
+def test_maybe_wait_raises_on_failed_task(monkeypatch):
+    client = MagicMock()
+    client.task_status.return_value = {"status": "stopped", "exitstatus": "some error"}
+    state = cli.State(settings=None)
+    state.client = client
+    ctx = SimpleNamespace(obj=state)
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    with pytest.raises(RuntimeError):
+        cli._maybe_wait(ctx, "pve1", "UPID:x")
+
+
 def test_error_json_envelope_readonly(fake_client, creds):
     fake_client.resolve_node.return_value = "pve1"
     r = inv(["--json", "vm", "start", "100"], creds)

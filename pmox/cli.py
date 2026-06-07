@@ -206,6 +206,9 @@ def _maybe_wait(ctx: typer.Context, node: str, result):
     while True:
         status = client.task_status(node, result)
         if status.get("status") == "stopped":
+            exitstatus = status.get("exitstatus")
+            if exitstatus is not None and exitstatus != "OK":
+                raise RuntimeError(f"Task {result} failed: {exitstatus}")
             return status
         if time.monotonic() >= deadline:
             raise TimeoutError(f"Task {result} did not finish within {ctx.obj.timeout}s.")
