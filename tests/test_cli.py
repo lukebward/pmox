@@ -1076,3 +1076,52 @@ def test_image_pull_rejects_volid(fake_client, creds):
     r = inv(["--dangerous", "image", "pull", "local:import/x.qcow2", "--storage", "local", "--node", "pve1"], creds)
     assert r.exit_code == 1, r.output
     fake_client.download_url.assert_not_called()
+
+
+# ------------------------------------------------- Task 4 (C2): vm new --from-template --
+
+
+def test_vm_new_from_template_clones_and_sets_ci(fake_client, creds, tmp_path, monkeypatch):
+    import pmox.cli as cli
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    key = tmp_path / "id.pub"
+    key.write_text("ssh-ed25519 AAAA user@host")
+    fake_client.resolve_node.return_value = "pve1"
+    fake_client.clone_guest.return_value = "UPID:clone"
+    fake_client.guest_power.return_value = "UPID:start"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--dangerous", "vm", "new", "web", "--from-template", "9000", "--vmid", "120",
+             "--ssh-key", str(key), "--ip", "dhcp", "--ciuser", "ubuntu"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.clone_guest.assert_called_once_with(node="pve1", kind="qemu", vmid=9000, newid=120, name="web", full=1)
+    ci = fake_client.update_config.call_args.kwargs
+    assert ci["ciuser"] == "ubuntu" and ci["ipconfig0"] == "ip=dhcp"
+
+
+def test_vm_new_from_template_dry_run(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["--dry-run", "vm", "new", "web", "--from-template", "9000", "--vmid", "120"], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["op"] == "qemu.new.from_template"
+    assert payload["plan"][0]["op"] == "clone_guest"
+    fake_client.clone_guest.assert_not_called()
+
+
+def test_vm_new_image_and_template_mutually_exclusive(fake_client, creds):
+    r = inv(["--dangerous", "vm", "new", "web", "--image", "ubuntu-24.04", "--from-template", "9000", "--node", "pve1"], creds)
+    assert r.exit_code == 1, r.output
+
+
+def test_vm_new_from_template_needs_dangerous(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    r = inv(["vm", "new", "web", "--from-template", "9000", "--vmid", "120"], creds)
+    assert r.exit_code == 4, r.output
+    fake_client.clone_guest.assert_not_called()
+
+
+def test_vm_new_from_template_resolve_fails(fake_client, creds):
+    fake_client.resolve_node.return_value = None
+    r = inv(["--dangerous", "vm", "new", "web", "--from-template", "9000", "--vmid", "120"], creds)
+    assert r.exit_code == 1, r.output
+    fake_client.clone_guest.assert_not_called()

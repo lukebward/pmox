@@ -739,7 +739,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
 
     if kind == "qemu":
 
-        @group.command("new", help="Create a VM: blank shell, or a cloud-init server with --image.")
+        @group.command("new", help="Create a VM: blank shell, cloud-init server with --image, or clone from --from-template.")
         def _new(
             ctx: typer.Context,
             name: Optional[str] = typer.Argument(None, help="VM name (optional)."),
@@ -750,6 +750,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
             vmid: Optional[int] = typer.Option(None, "--vmid", help="VMID (auto-assigned if omitted)."),
             option: Optional[List[str]] = typer.Option(None, "--option", "-o", help="Extra create param key=value."),
             image: Optional[str] = typer.Option(None, "--image", help="Cloud image (catalog name, https URL, or volid). Enables cloud-init mode."),
+            from_template: Optional[int] = typer.Option(None, "--from-template", help="Clone an existing template VMID into a cloud-init VM. Cloud-init mode."),
             ssh_key: Optional[List[str]] = typer.Option(None, "--ssh-key", help="Path to an SSH public key file (repeatable). Cloud-init mode."),
             ip: Optional[str] = typer.Option(None, "--ip", help="dhcp or <cidr>,gw=<ip>. Cloud-init mode."),
             ciuser: Optional[str] = typer.Option(None, "--ciuser", help="Cloud-init user. Cloud-init mode."),
@@ -758,8 +759,38 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
         ):
             with error_boundary(ctx.obj.json):
                 client = _get_client(ctx)
-                target_node = node or _single_node_or_die(client)
+                if image and from_template:
+                    raise ValueError("--image and --from-template are mutually exclusive.")
                 target_vmid = vmid if vmid is not None else int(client.cluster_nextid())
+
+                if from_template:
+                    target_node = node or client.resolve_node(from_template)
+                    if not target_node:
+                        raise LookupError(f"Could not locate template {from_template} in the cluster.")
+                    sshkeys = "\n".join(Path(p).read_text().strip() for p in (ssh_key or [])) or None
+                    plan = provision.build_vm_clone_plan(
+                        client,
+                        node=target_node,
+                        template_id=from_template,
+                        newid=target_vmid,
+                        name=name,
+                        disk=disk,
+                        sshkeys=sshkeys,
+                        ipconfig=provision.build_ipconfig(ip) if ip else None,
+                        ciuser=ciuser,
+                        cipassword=cipassword,
+                        nameserver=nameserver,
+                        start=True,
+                    )
+                    if ctx.obj.dry_run:
+                        print(json.dumps({"dry_run": True, "op": "qemu.new.from_template", "node": target_node, "plan": plan}, default=str, indent=2))
+                        return
+                    require_dangerous(ctx.obj.dangerous)
+                    provision.execute_plan(client, target_node, plan, waiter=lambda n, upid: _maybe_wait(ctx, n, upid))
+                    _ok(ctx, f"Cloned template {from_template} -> VM {target_vmid} on {target_node}")
+                    return
+
+                target_node = node or _single_node_or_die(client)
                 profile = catalog.size_params(size)
 
                 if image:
