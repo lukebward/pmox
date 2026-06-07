@@ -144,17 +144,18 @@ pmox --dangerous vm new web \
 pmox auto-picks a VMID and node, imports the image, wires cloud-init, and
 waits for the task to complete.
 
-### Seamless VM with an auto-allocated static IP
+### Seamless one-shot VM (`vm up`)
 
 ```
 pmox --dangerous vm up web --image ubuntu-24.04 --wait
 ```
 
-Requires a `[network]` pool in config (`cidr`/`gateway`/`pool`, the pool outside
-your DHCP scope). pmox allocates a free static IP from the pool, auto-routes the
-image import to a storage with the `import` content type, and ensures an SSH key.
-`pmox vm ip <vmid>` returns the address immediately (read from cloud-init config —
-no guest agent needed).
+Zero-config: auto-routes the image import to an `import`-capable storage, ensures
+an SSH key (generating one if absent), and creates the VM with **DHCP** by
+default. For a known static IP, pass `--ip <cidr>,gw=<ip>`, or set a `[network]`
+pool (`cidr`/`gateway`/`pool`, outside your DHCP scope) so pmox auto-allocates a
+free address — then `pmox vm ip <vmid>` returns it immediately from cloud-init
+config, no guest agent needed.
 
 ### Ready container (ready to SSH)
 

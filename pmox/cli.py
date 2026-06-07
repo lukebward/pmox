@@ -938,17 +938,16 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 if ip:
                     ipconfig = provision.build_ipconfig(ip)
                     chosen_ip = ip.split(",", 1)[0].split("/", 1)[0]
-                else:
-                    if not (settings.net_cidr and settings.net_gateway and settings.net_pool):
-                        raise ValueError(
-                            "vm up needs a static-IP pool. Set [network] cidr/gateway/pool in your "
-                            "pmox config (or PROXMOX_NET_CIDR/GATEWAY/POOL), or pass --ip explicitly."
-                        )
+                elif settings.net_cidr and settings.net_gateway and settings.net_pool:
                     allocated = ipam.allocate_ip(
                         client, cidr=settings.net_cidr, gateway=settings.net_gateway, pool=settings.net_pool
                     )
                     ipconfig = f"ip={allocated},gw={settings.net_gateway}"
                     chosen_ip = allocated.split("/", 1)[0]
+                else:
+                    # zero-config default: let the VM DHCP. Set a [network] pool (or --ip) for a known static IP.
+                    ipconfig = provision.build_ipconfig("dhcp")
+                    chosen_ip = None
 
                 needs_import = catalog.resolve_image(image)["kind"] != "volid"
                 resolved_import = (
@@ -983,11 +982,14 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 provision.execute_plan(client, target_node, _build(sshkeys), waiter=lambda n, upid: _maybe_wait(ctx, n, upid))
 
                 if ctx.obj.json:
-                    ssh_val = f"ssh {chosen_ciuser}@{chosen_ip}" if chosen_ciuser else None
+                    ssh_val = f"ssh {chosen_ciuser}@{chosen_ip}" if (chosen_ip and chosen_ciuser) else None
                     emit({"vmid": target_vmid, "name": name, "node": target_node, "ip": chosen_ip, "ssh": ssh_val}, json_output=True)
-                else:
+                elif chosen_ip:
                     console.print(f"VM {target_vmid}  {name}  ip {chosen_ip}")
                     console.print(f"ssh {chosen_ciuser}@{chosen_ip}" if chosen_ciuser else f"ssh <image's default user>@{chosen_ip}")
+                else:
+                    console.print(f"VM {target_vmid}  {name}  ip via DHCP (not known yet)")
+                    console.print("Find it in your router's DHCP leases, or set a [network] pool for an auto-assigned static IP.")
 
     if kind == "lxc":
 

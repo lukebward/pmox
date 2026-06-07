@@ -137,7 +137,7 @@ pmox vm tag <vmid> --add t1,t2       add tags; --remove / --set also available (
 pmox vm start|shutdown|reboot|suspend|resume <vmid>      (needs --dangerous)
 pmox vm stop|reset <vmid>                                (needs --dangerous --yes)
 pmox vm new [name] [--image img | --from-template id]    create VM (needs --dangerous; see Provisioning)
-pmox vm up <name> --image <name>                         ready-to-SSH VM, auto static IP (needs [network] config)
+pmox vm up <name> --image <name>                         ready-to-SSH VM (DHCP; --ip or [network] pool for a static IP)
 pmox vm create <vmid> --node N [-o key=val ...]          low-level create
 pmox vm clone <vmid> --newid <id> [--name X] [--full] [--target N]
 pmox vm migrate <vmid> --target N [--online]             (needs --dangerous --yes)
@@ -200,7 +200,19 @@ trusted source or a pre-verified image.
 
 ### Seamless one-shot VM (`vm up`)
 
-With a static-IP pool configured once:
+Zero config — the VM gets its address via DHCP:
+
+```
+pmox --dangerous vm up web --image ubuntu-24.04 --wait
+```
+
+pmox routes the image import to a file-based storage, ensures an SSH key
+(generating `~/.ssh/id_ed25519.pub` if absent), and creates the VM. With DHCP the
+address isn't known on return (find it in your router's leases).
+
+For a **known static IP**, either pass `--ip 192.168.0.50/24,gw=192.168.0.1`, or
+configure a pool once so pmox auto-allocates the lowest free address (scanning
+existing static `ipconfigN` across the cluster — no guest agent required):
 
 ```toml
 [network]
@@ -208,15 +220,6 @@ cidr = "192.168.0.0/24"
 gateway = "192.168.0.1"
 pool = "192.168.0.200-192.168.0.250"   # MUST be outside your DHCP scope
 ```
-
-```
-pmox --dangerous vm up web --image ubuntu-24.04 --wait
-```
-
-pmox allocates the lowest free address in the pool (by scanning existing static
-`ipconfigN` across the cluster), routes the image import to a file-based storage,
-ensures an SSH key (generating `~/.ssh/id_ed25519.pub` if absent), and prints the
-IP + `ssh` command. No guest agent required.
 
 ### Clone from a template (`vm new --from-template`)
 

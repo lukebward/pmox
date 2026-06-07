@@ -1489,14 +1489,36 @@ def test_vm_up_explicit_ip_skips_allocation(fake_client, creds, tmp_path, monkey
     assert out["ssh"] is None  # no ciuser -> JSON ssh is null; human output prints a placeholder instead
 
 
-def test_vm_up_no_pool_configured_errors(fake_client, creds, tmp_path):
+def test_vm_up_no_config_defaults_to_dhcp(fake_client, creds, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
     key = tmp_path / "id_ed25519.pub"
     key.write_text("ssh-ed25519 AAAA u@h")
     fake_client.cluster_nextid.return_value = "150"
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.storage_content.return_value = []
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    # creds has no [network] pool and no --ip -> DHCP, zero config required
     r = inv(["--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
              "--ssh-key", str(key)], creds)
-    assert r.exit_code == 1, r.output
-    fake_client.create_guest.assert_not_called()
+    assert r.exit_code == 0, r.output
+    fake_client.cluster_resources.assert_not_called()  # no static allocation attempted
+    assert fake_client.create_guest.call_args.kwargs["ipconfig0"] == "ip=dhcp"
+    out = json.loads(r.output)
+    assert out["ip"] is None and out["ssh"] is None
+
+
+def test_vm_up_dhcp_human_output(fake_client, creds, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("ssh-ed25519 AAAA u@h")
+    fake_client.cluster_nextid.return_value = "150"
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.storage_content.return_value = []
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--no-json", "--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04",
+             "--node", "pve1", "--ssh-key", str(key)], creds)
+    assert r.exit_code == 0, r.output
+    assert "DHCP" in r.output
 
 
 def test_vm_up_dry_run(fake_client, creds, tmp_path):
