@@ -30,7 +30,7 @@ from typing import List, Optional
 
 import typer
 
-from . import __version__, catalog, views
+from . import __version__, catalog, provision, views
 from .client import ProxmoxClient
 from .config import ConfigError, Settings, _parse_bool, load_settings
 from .output import (
@@ -736,22 +736,58 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
 
     if kind == "qemu":
 
-        @group.command("new", help="Create a VM with a sizing profile and sane defaults.")
+        @group.command("new", help="Create a VM: blank shell, or a cloud-init server with --image.")
         def _new(
             ctx: typer.Context,
             name: Optional[str] = typer.Argument(None, help="VM name (optional)."),
             size: str = typer.Option("small", "--size", help="Sizing profile: small | medium | large."),
-            disk: Optional[int] = typer.Option(None, "--disk", help="Disk size in GiB (created on --storage)."),
-            storage: str = typer.Option("local-lvm", "--storage", help="Storage for the disk."),
-            node: Optional[str] = typer.Option(None, "--node", "-n", help="Node (auto-picked if the cluster has one node)."),
-            vmid: Optional[int] = typer.Option(None, "--vmid", help="VMID (auto-assigned from the cluster if omitted)."),
-            option: Optional[List[str]] = typer.Option(None, "--option", "-o", help="Extra create param key=value (repeatable)."),
+            disk: Optional[int] = typer.Option(None, "--disk", help="Disk size in GiB."),
+            storage: str = typer.Option("local-lvm", "--storage", help="Storage for the disk/cloud-init."),
+            node: Optional[str] = typer.Option(None, "--node", "-n", help="Node (auto-picked if one node)."),
+            vmid: Optional[int] = typer.Option(None, "--vmid", help="VMID (auto-assigned if omitted)."),
+            option: Optional[List[str]] = typer.Option(None, "--option", "-o", help="Extra create param key=value."),
+            image: Optional[str] = typer.Option(None, "--image", help="Cloud image (catalog name, https URL, or volid). Enables cloud-init mode."),
+            ssh_key: Optional[List[str]] = typer.Option(None, "--ssh-key", help="Path to an SSH public key file (repeatable). Cloud-init mode."),
+            ip: Optional[str] = typer.Option(None, "--ip", help="dhcp or <cidr>,gw=<ip>. Cloud-init mode."),
+            ciuser: Optional[str] = typer.Option(None, "--ciuser", help="Cloud-init user. Cloud-init mode."),
+            cipassword: Optional[str] = typer.Option(None, "--cipassword", help="Cloud-init password. Cloud-init mode."),
+            nameserver: Optional[str] = typer.Option(None, "--nameserver", help="Cloud-init DNS server(s). Cloud-init mode."),
         ):
             with error_boundary(ctx.obj.json):
                 client = _get_client(ctx)
                 target_node = node or _single_node_or_die(client)
                 target_vmid = vmid if vmid is not None else int(client.cluster_nextid())
-                params = catalog.size_params(size)
+                profile = catalog.size_params(size)
+
+                if image:
+                    sshkeys = "\n".join(Path(p).read_text().strip() for p in (ssh_key or [])) or None
+                    plan = provision.build_vm_image_plan(
+                        client,
+                        node=target_node,
+                        vmid=target_vmid,
+                        name=name,
+                        cores=profile["cores"],
+                        memory=profile["memory"],
+                        disk=disk,
+                        storage=storage,
+                        image=image,
+                        sshkeys=sshkeys,
+                        ipconfig=provision.build_ipconfig(ip) if ip else None,
+                        ciuser=ciuser,
+                        cipassword=cipassword,
+                        nameserver=nameserver,
+                        start=True,
+                    )
+                    if ctx.obj.dry_run:
+                        print(json.dumps({"dry_run": True, "op": "qemu.new.image", "node": target_node, "plan": plan}, default=str, indent=2))
+                        return
+                    require_dangerous(ctx.obj.dangerous)
+                    provision.execute_plan(client, target_node, plan, waiter=lambda n, upid: _maybe_wait(ctx, n, upid))
+                    _ok(ctx, f"Created cloud-init VM {target_vmid} on {target_node} from {image}")
+                    return
+
+                # blank shell (B2 behavior)
+                params = dict(profile)
                 params.update({"scsihw": "virtio-scsi-single", "net0": "virtio,bridge=vmbr0", "ostype": "l26"})
                 if name:
                     params["name"] = name

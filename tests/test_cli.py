@@ -949,3 +949,55 @@ def test_vm_new_dry_run(fake_client, creds):
 def test_ct_has_no_new(fake_client, creds):
     r = inv(["ct", "new", "box"], creds)
     assert r.exit_code != 0  # no such command for containers
+
+
+# ------------------------------------------------- Task 5 (C1): vm new --image cloud-init mode --
+
+
+def test_vm_new_image_creates_cloudinit_vm(fake_client, creds, tmp_path, monkeypatch):
+    import pmox.cli as cli
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)  # don't actually sleep while polling
+    key = tmp_path / "id.pub"
+    key.write_text("ssh-ed25519 AAAA user@host")
+    fake_client.storage_content.return_value = []
+    fake_client.download_url.return_value = "UPID:dl"
+    fake_client.create_guest.return_value = "UPID:create"
+    fake_client.guest_power.return_value = "UPID:start"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(
+        ["--dangerous", "vm", "new", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+         "--vmid", "150", "--disk", "50", "--ssh-key", str(key), "--ip", "dhcp", "--ciuser", "ubuntu"],
+        creds,
+    )
+    assert r.exit_code == 0, r.output
+    fake_client.download_url.assert_called_once()
+    create_kwargs = fake_client.create_guest.call_args.kwargs
+    assert create_kwargs["ide2"] == "local-lvm:cloudinit"
+    assert create_kwargs["ciuser"] == "ubuntu"
+    assert "import-from=local-lvm:import/noble-server-cloudimg-amd64.qcow2" in create_kwargs["scsi0"]
+    fake_client.resize_disk.assert_called_once_with(node="pve1", kind="qemu", vmid=150, disk="scsi0", size="50G")
+
+
+def test_vm_new_image_dry_run_prints_plan(fake_client, creds, tmp_path):
+    fake_client.storage_content.return_value = []
+    r = inv(["--dry-run", "vm", "new", "web", "--image", "ubuntu-24.04", "--node", "pve1", "--vmid", "150"], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["op"] == "qemu.new.image"
+    assert [s["op"] for s in payload["plan"]] == ["download_url", "create_guest", "guest_power"]
+    fake_client.create_guest.assert_not_called()
+
+
+def test_vm_new_image_needs_dangerous(fake_client, creds):
+    fake_client.storage_content.return_value = []
+    r = inv(["vm", "new", "web", "--image", "ubuntu-24.04", "--node", "pve1", "--vmid", "150"], creds)
+    assert r.exit_code == 4, r.output
+    fake_client.create_guest.assert_not_called()
+
+
+def test_vm_new_blank_still_works(fake_client, creds):
+    # no --image → the B2 blank-shell path is unchanged
+    r = inv(["--dangerous", "vm", "new", "--node", "pve1", "--vmid", "150"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.create_guest.assert_called_once()
+    assert "ide2" not in fake_client.create_guest.call_args.kwargs
