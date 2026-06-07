@@ -69,10 +69,21 @@ Under `--json` (or when the output is captured), errors are a structured
 envelope you can branch on:
 
 ```json
-{"ok": false, "error": "...", "need": ["--dangerous"], "message": "..."}
+{"ok": false, "error": "read_only", "need": ["--dangerous"], "message": "..."}
 ```
 
-Check `ok` first; if false, read `need` to decide which gate is missing.
+`error` is one of four fixed codes:
+
+| Code | Exit | Meaning |
+|------|------|---------|
+| `read_only` | 4 | Operation needs `--dangerous` |
+| `confirm_required` | 3 | Operation needs `--yes` |
+| `config` | 2 | Credentials not configured |
+| `error` | 1 | General error |
+
+Check `ok` first. If `ok` is false and a `need` array is present (only for
+`read_only` and `confirm_required`), it lists the flag to add (`--dangerous`
+or `--yes`). For `config` and `error` there is no `need` key.
 
 ### `--dry-run`
 
@@ -265,7 +276,7 @@ pmox --dangerous ct new <name> --template <name|volid>
                                 [--ssh-key <path>] [--ip dhcp|<cidr>,gw=<ip>]
                                 [--password <pw>] [--wait] [--dry-run]
 pmox --dangerous image pull <name|url> --storage <storage> --node <node>
-                                [--as-template] [--vmid <id>] [--name <name>]
+                                [--as-template [--vmid <id>] [--name <name>]]
                                 [--ct]
 pmox --dangerous vm set <vmid> -o key=value [-o key=value ...]
 pmox --dangerous ct set <vmid> -o key=value [-o key=value ...]
@@ -349,9 +360,9 @@ pmox --dangerous --yes ct set <vmid> -o delete=<key>
    then run with both `--dangerous --yes`.
 
 4. **Never try to bypass the gates.** If the CLI exits with code 3 or 4, that
-   is the safety model working as intended. Surface the `need` field from the
-   JSON error envelope and ask the user for explicit confirmation before retrying
-   with the appropriate flags.
+   is the safety model working as intended. Surface the `need` field (present
+   for exit 3 and 4) from the JSON error envelope and ask the user for explicit
+   confirmation before retrying with the appropriate flags.
 
 5. **Use `--wait` for create/start operations** when you need to confirm
    completion before reporting success or taking the next step.
