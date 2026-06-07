@@ -100,6 +100,33 @@ def _parse_lxc_interfaces(rows) -> list:
     return interfaces
 
 
+def _parse_ipconfig_interfaces(config) -> list:
+    """Static IPs declared in cloud-init ipconfigN keys (no guest agent needed)."""
+    interfaces = []
+    for key in sorted(config):
+        if not key.startswith("ipconfig"):
+            continue
+        fields = dict(p.split("=", 1) for p in str(config[key]).split(",") if "=" in p)
+        addresses = []
+        for family, fkey in (("ipv4", "ip"), ("ipv6", "ip6")):
+            cidr = fields.get(fkey)
+            if not cidr or cidr in ("dhcp", "auto", "manual"):
+                continue
+            address, _, prefix = cidr.partition("/")
+            addresses.append(
+                {"family": family, "address": address,
+                 "prefix": int(prefix) if prefix.isdigit() else None,
+                 "scope": _addr_scope(family, address)}
+            )
+        if not addresses:
+            continue
+        idx = key[len("ipconfig"):]
+        mac = str(config.get("net" + idx, "")).split(",", 1)[0].partition("=")[2]
+        interfaces.append({"name": "net" + idx, "mac": mac if ":" in mac else None,
+                           "addresses": addresses})
+    return interfaces
+
+
 def _primary_ipv4(interfaces):
     """First global IPv4 across interfaces, in order (or None)."""
     for iface in interfaces:
@@ -120,8 +147,10 @@ def _safe_ip_addresses(client, kind, vmid, node) -> dict:
 def guest_ip_addresses(client, kind: str, vmid: int, node: Optional[str] = None) -> dict:
     """Live network interfaces + IPs for a guest, normalized across qemu/lxc.
 
-    Raises ``LookupError`` if the guest can't be located, or ``RuntimeError`` with
-    an actionable message if the agent/interfaces endpoint can't be read.
+    For VMs the live source is the QEMU guest agent; if it isn't available, this
+    falls back to any static IP declared in the cloud-init ``ipconfigN`` config
+    (``source: "config"``). Raises ``LookupError`` if the guest can't be located,
+    or ``RuntimeError`` with an actionable message if neither source yields data.
     """
     row = _locate_guest(client, vmid)
     node = node or (row.get("node") if row else None)
@@ -133,13 +162,17 @@ def guest_ip_addresses(client, kind: str, vmid: int, node: Optional[str] = None)
         source = "guest-agent"
         try:
             payload = client.agent_network_interfaces(node, vmid)
-        except Exception as exc:  # noqa: BLE001 - any agent failure -> actionable message
-            raise RuntimeError(
-                f"Could not read network interfaces for VM {vmid}: {exc}. "
-                f"Ensure qemu-guest-agent is installed and running in the guest and "
-                f"'agent: 1' is set (pmox vm set {vmid} -o agent=1 --dangerous)."
-            ) from exc
-        interfaces = _parse_qemu_interfaces(payload)
+        except Exception as agent_exc:  # noqa: BLE001 - agent down -> fall back to static ipconfig
+            interfaces = _parse_ipconfig_interfaces(client.guest_config(node, kind, vmid))
+            if not interfaces:
+                raise RuntimeError(
+                    f"Could not read network interfaces for VM {vmid}: {agent_exc}. "
+                    f"Ensure qemu-guest-agent is installed and running in the guest and "
+                    f"'agent: 1' is set (pmox vm set {vmid} -o agent=1 --dangerous)."
+                ) from agent_exc
+            source = "config"
+        else:
+            interfaces = _parse_qemu_interfaces(payload)
     else:
         source = "lxc-interfaces"
         try:

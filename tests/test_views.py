@@ -206,11 +206,31 @@ def test_guest_ip_addresses_not_found_raises():
         views.guest_ip_addresses(c, "qemu", 999)
 
 
-def test_guest_ip_addresses_qemu_agent_down_raises():
+def test_guest_ip_addresses_qemu_agent_down_no_static_ip_raises():
     c = _ip_client({"vmid": 150, "node": "lukeserver", "name": "web"})
     c.agent_network_interfaces.side_effect = RuntimeError("500 guest agent is not running")
+    c.guest_config.return_value = {"ipconfig0": "ip=dhcp,ip6=auto"}  # nothing static to fall back to
     with pytest.raises(RuntimeError, match="agent: 1"):
         views.guest_ip_addresses(c, "qemu", 150)
+
+
+def test_guest_ip_addresses_qemu_falls_back_to_static_ipconfig():
+    c = _ip_client({"vmid": 150, "node": "lukeserver", "name": "web"})
+    c.agent_network_interfaces.side_effect = RuntimeError("500 guest agent is not running")
+    c.guest_config.return_value = {
+        "cores": 2,  # non-ipconfig key is ignored
+        "net0": "virtio=BC:24:11:DB:45:BF,bridge=vmbr0",
+        "ipconfig0": "ip=192.168.0.240/24,gw=192.168.0.1,ip6=2001:db8::5/64",
+    }
+    out = views.guest_ip_addresses(c, "qemu", 150)
+    assert out["source"] == "config"
+    assert out["primary"] == "192.168.0.240"
+    net0 = next(i for i in out["interfaces"] if i["name"] == "net0")
+    assert net0["mac"] == "BC:24:11:DB:45:BF"
+    addrs = {(a["address"], a["family"], a["prefix"], a["scope"]) for a in net0["addresses"]}
+    assert ("192.168.0.240", "ipv4", 24, "global") in addrs
+    assert ("2001:db8::5", "ipv6", 64, "global") in addrs
+    c.guest_config.assert_called_once_with("lukeserver", "qemu", 150)
 
 
 def test_guest_ip_addresses_lxc_stopped_raises():
