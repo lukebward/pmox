@@ -222,3 +222,8 @@ def test_download_url_without_checksum(client, api):
     getattr(seg, "download-url").post.assert_called_once_with(
         url="https://x/y.qcow2", content="import", filename="y.qcow2",
     )
+
+
+def test_convert_to_template(client, api):
+    client.convert_to_template("pve1", "qemu", 9000)
+    api.nodes.return_value.qemu.return_value.template.post.assert_called_once_with()

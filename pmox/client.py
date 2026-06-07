@@ -93,6 +93,10 @@ class ProxmoxClient:
     def clone_guest(self, node: str, kind: str, vmid, newid, **params) -> Any:
         return self._guest(node, kind, vmid).clone.post(newid=newid, **params)
 
+    def convert_to_template(self, node: str, kind: str, vmid) -> Any:
+        """Convert a stopped guest into a template (one-way)."""
+        return self._guest(node, kind, vmid).template.post()
+
     def migrate_guest(self, node: str, kind: str, vmid, target, **params) -> Any:
         return self._guest(node, kind, vmid).migrate.post(target=target, **params)
 
