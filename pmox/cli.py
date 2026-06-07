@@ -1195,9 +1195,12 @@ def image_pull(
     name: Optional[str] = typer.Option(None, "--name", help="Name for the template. Used with --as-template."),
     ct: bool = typer.Option(False, "--ct", help="Pull an LXC container template via aplinfo instead of a VM cloud image."),
 ):
-    """Download a VM cloud image to a storage (cached; needs --dangerous)."""
+    """Download a VM cloud image (or, with --ct, an LXC container template) to a storage; with --as-template, build a reusable golden VM template. Needs --dangerous."""
     with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
+
+        if ct and as_template:
+            raise ValueError("--ct and --as-template are mutually exclusive.")
 
         if ct:
             matches = [a for a in client.list_appliances(node) if image in a.get("template", "")]

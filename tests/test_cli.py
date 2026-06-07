@@ -1266,3 +1266,8 @@ def test_image_pull_ct_dry_run(fake_client, creds):
     assert payload["op"] == "image.pull.ct"
     assert payload["dry_run"] is True
     fake_client.download_appliance.assert_not_called()
+
+
+def test_image_pull_ct_and_as_template_exclusive(fake_client, creds):
+    r = inv(["--dangerous", "image", "pull", "ubuntu-24.04", "--ct", "--as-template", "--storage", "local", "--node", "pve1"], creds)
+    assert r.exit_code == 1, r.output
