@@ -87,6 +87,7 @@ def build_vm_image_plan(
     cipassword=None,
     nameserver=None,
     start=True,
+    extra=None,
 ) -> list:
     """Build the ordered plan for an all-in-one cloud-init VM."""
     volid, download = _resolve_image_volid(client, node, storage, image)
@@ -122,6 +123,8 @@ def build_vm_image_plan(
         create_args["cipassword"] = cipassword
     if nameserver:
         create_args["nameserver"] = nameserver
+    if extra:
+        create_args.update(extra)
     plan.append(step("create_guest", create_args, await_task=True, describe=f"create VM {vmid} (import {volid})"))
 
     if disk:

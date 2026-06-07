@@ -777,6 +777,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                         cipassword=cipassword,
                         nameserver=nameserver,
                         start=True,
+                        extra=parse_options(option),
                     )
                     if ctx.obj.dry_run:
                         print(json.dumps({"dry_run": True, "op": "qemu.new.image", "node": target_node, "plan": plan}, default=str, indent=2))

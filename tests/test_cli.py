@@ -978,7 +978,7 @@ def test_vm_new_image_creates_cloudinit_vm(fake_client, creds, tmp_path, monkeyp
     fake_client.resize_disk.assert_called_once_with(node="pve1", kind="qemu", vmid=150, disk="scsi0", size="50G")
 
 
-def test_vm_new_image_dry_run_prints_plan(fake_client, creds, tmp_path):
+def test_vm_new_image_dry_run_prints_plan(fake_client, creds):
     fake_client.storage_content.return_value = []
     r = inv(["--dry-run", "vm", "new", "web", "--image", "ubuntu-24.04", "--node", "pve1", "--vmid", "150"], creds)
     assert r.exit_code == 0, r.output
@@ -1001,3 +1001,19 @@ def test_vm_new_blank_still_works(fake_client, creds):
     assert r.exit_code == 0, r.output
     fake_client.create_guest.assert_called_once()
     assert "ide2" not in fake_client.create_guest.call_args.kwargs
+
+
+def test_vm_new_image_passes_o_options(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.storage_content.return_value = []
+    fake_client.download_url.return_value = "UPID:dl"
+    fake_client.create_guest.return_value = "UPID:create"
+    fake_client.guest_power.return_value = "UPID:start"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(
+        ["--dangerous", "vm", "new", "web", "--image", "ubuntu-24.04",
+         "--node", "pve1", "--vmid", "150", "-o", "agent=0"],
+        creds,
+    )
+    assert r.exit_code == 0, r.output
+    assert fake_client.create_guest.call_args.kwargs["agent"] == "0"
