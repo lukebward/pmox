@@ -808,3 +808,40 @@ def test_tag_reads_then_writes(fake_client, creds):
     r = inv(["--dangerous", "vm", "tag", "100", "--add", "k3s"], creds)
     assert r.exit_code == 0, r.output
     fake_client.update_config.assert_called_once_with("pve1", "qemu", 100, tags="prod;k3s")
+
+
+# ------------------------------------------------- Task 3: vm/ct describe command --
+
+
+def test_describe_json(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    fake_client.guest_status.return_value = {"status": "running"}
+    fake_client.guest_config.return_value = {"cores": 2}
+    fake_client.list_snapshots.return_value = []
+    fake_client.list_tasks.return_value = []
+    r = inv(["--json", "vm", "describe", "100"], creds)
+    assert r.exit_code == 0, r.output
+    data = json.loads(r.output)
+    assert data["vmid"] == 100 and data["node"] == "pve1" and data["kind"] == "qemu"
+
+
+def test_describe_human(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    fake_client.guest_status.return_value = {"status": "running"}
+    fake_client.guest_config.return_value = {"cores": 2}
+    fake_client.list_snapshots.return_value = [{"name": "pre"}]
+    fake_client.list_tasks.return_value = [{"id": "100", "type": "qmstart"}]
+    r = inv(["--no-json", "vm", "describe", "100"], creds)
+    assert r.exit_code == 0, r.output
+    assert "running" in plain(r.output)
+
+
+def test_describe_ct(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    fake_client.guest_status.return_value = {"status": "running"}
+    fake_client.guest_config.return_value = {}
+    fake_client.list_snapshots.return_value = []
+    fake_client.list_tasks.return_value = []
+    r = inv(["--json", "ct", "describe", "200"], creds)
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["kind"] == "lxc"

@@ -30,11 +30,12 @@ from typing import List, Optional
 
 import typer
 
-from . import __version__
+from . import __version__, views
 from .client import ProxmoxClient
 from .config import ConfigError, Settings, _parse_bool, load_settings
 from .output import (
     Column,
+    build_kv_table,
     console,
     emit,
     err_console,
@@ -551,6 +552,19 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, vmid)
             emit(client.guest_config(resolved, kind, vmid), json_output=ctx.obj.json, title=f"{label} {vmid} config")
+
+    @group.command("describe", help=f"Consolidated view of a {label}: status, config, snapshots, recent tasks.")
+    def _describe(ctx: typer.Context, vmid: int = vmid_arg, node: Optional[str] = node_opt):
+        with error_boundary(ctx.obj.json):
+            client = _get_client(ctx)
+            data = views.describe_guest(client, kind, vmid, node=node)
+            if ctx.obj.json:
+                emit(data, json_output=True)
+            else:
+                console.print(build_kv_table(data["status"], title=f"{label} {vmid} status"))
+                console.print(build_kv_table(data["config"], title="config"))
+                emit(data["snapshots"], columns=SNAPSHOT_COLUMNS, json_output=False, title="snapshots")
+                emit(data["recent_tasks"], columns=TASK_COLUMNS, json_output=False, title="recent tasks")
 
     @group.command("set", help=f"Update configuration of a {label} (cores, memory, disks, nics, tags, …).")
     def _set(
