@@ -1017,3 +1017,51 @@ def test_vm_new_image_passes_o_options(fake_client, creds, monkeypatch):
     )
     assert r.exit_code == 0, r.output
     assert fake_client.create_guest.call_args.kwargs["agent"] == "0"
+
+
+# ------------------------------------------------- Task 6 (C1): image list + image pull --
+
+
+def test_image_list_json(fake_client, creds):
+    r = inv(["--json", "image", "list"], creds)
+    assert r.exit_code == 0, r.output
+    names = [row["name"] for row in json.loads(r.output)]
+    assert "ubuntu-24.04" in names
+
+
+def test_image_pull_downloads(fake_client, creds, monkeypatch):
+    import pmox.cli as cli
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.storage_content.return_value = []
+    fake_client.download_url.return_value = "UPID:dl"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--dangerous", "image", "pull", "ubuntu-24.04", "--storage", "local", "--node", "pve1"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.download_url.assert_called_once()
+    assert fake_client.download_url.call_args.kwargs["content"] == "import"
+
+
+def test_image_pull_needs_dangerous(fake_client, creds):
+    r = inv(["image", "pull", "ubuntu-24.04", "--storage", "local", "--node", "pve1"], creds)
+    assert r.exit_code == 4, r.output
+    fake_client.download_url.assert_not_called()
+
+
+def test_image_pull_cached_skips(fake_client, creds):
+    fake_client.storage_content.return_value = [{"volid": "local:import/noble-server-cloudimg-amd64.qcow2"}]
+    r = inv(["--dangerous", "image", "pull", "ubuntu-24.04", "--storage", "local", "--node", "pve1"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.download_url.assert_not_called()
+
+
+def test_image_pull_dry_run(fake_client, creds):
+    r = inv(["--dry-run", "image", "pull", "ubuntu-24.04", "--storage", "local", "--node", "pve1"], creds)
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["op"] == "image.pull"
+    fake_client.download_url.assert_not_called()
+
+
+def test_image_pull_rejects_volid(fake_client, creds):
+    r = inv(["--dangerous", "image", "pull", "local:import/x.qcow2", "--storage", "local", "--node", "pve1"], creds)
+    assert r.exit_code == 1, r.output
+    fake_client.download_url.assert_not_called()

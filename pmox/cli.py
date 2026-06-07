@@ -1082,12 +1082,54 @@ def task_log(
             console.print(line.get("t", "") if isinstance(line, dict) else str(line))
 
 
+# ---- image catalog / pull ----
+image_app = typer.Typer(help="VM cloud images: list the catalog and pull them to storage.", no_args_is_help=True)
+
+
+@image_app.command("list")
+def image_list(ctx: typer.Context):
+    """List the built-in VM image catalog."""
+    with error_boundary(ctx.obj.json):
+        rows = [{"name": name, "url": e["url"], "filename": e["filename"]} for name, e in catalog.IMAGE_CATALOG.items()]
+        emit(rows, json_output=ctx.obj.json, title="Image catalog")
+
+
+@image_app.command("pull")
+def image_pull(
+    ctx: typer.Context,
+    image: str = typer.Argument(..., help="Catalog name or https URL."),
+    storage: str = typer.Option(..., "--storage", help="Target storage (needs the 'import' content type)."),
+    node: str = typer.Option(..., "--node", "-n", help="Node to download on."),
+):
+    """Download a VM cloud image to a storage (cached; needs --dangerous)."""
+    with error_boundary(ctx.obj.json):
+        client = _get_client(ctx)
+        spec = catalog.resolve_image(image)
+        if spec["kind"] == "volid":
+            raise ValueError("image pull expects a catalog name or URL, not an existing volid.")
+        volid = f"{storage}:import/{spec['filename']}"
+        if ctx.obj.dry_run:
+            print(json.dumps({"dry_run": True, "op": "image.pull", "node": node, "params": {"volid": volid, "url": spec["url"]}}, default=str, indent=2))
+            return
+        require_dangerous(ctx.obj.dangerous)
+        if any(c.get("volid") == volid for c in client.storage_content(node, storage)):
+            _ok(ctx, f"Image already present: {volid}")
+            return
+        upid = client.download_url(
+            node, storage, url=spec["url"], content="import", filename=spec["filename"],
+            checksum=spec["checksum"], checksum_algorithm=spec["algo"],
+        )
+        _maybe_wait(ctx, node, upid)
+        _ok(ctx, f"Pulled {image} → {volid}", upid)
+
+
 app.add_typer(nodes_app, name="nodes")
 app.add_typer(vm_app, name="vm")
 app.add_typer(ct_app, name="ct")
 app.add_typer(storage_app, name="storage")
 app.add_typer(cluster_app, name="cluster")
 app.add_typer(task_app, name="task")
+app.add_typer(image_app, name="image")
 
 
 def main():
