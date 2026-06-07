@@ -18,6 +18,11 @@ import pmox.cli as cli
 
 runner = CliRunner()
 
+_IMPORT_STORAGES = [
+    {"storage": "local", "content": "import,iso,vztmpl,backup", "plugintype": "dir"},
+    {"storage": "local-lvm", "content": "images,rootdir", "plugintype": "lvmthin"},
+]
+
 
 def inv(args, creds, **kwargs):
     return runner.invoke(cli.app, args, env=creds, **kwargs)
@@ -1116,6 +1121,7 @@ def test_vm_new_image_creates_cloudinit_vm(fake_client, creds, tmp_path, monkeyp
     key = tmp_path / "id.pub"
     key.write_text("ssh-ed25519 AAAA user@host")
     fake_client.storage_content.return_value = []
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
     fake_client.download_url.return_value = "UPID:dl"
     fake_client.create_guest.return_value = "UPID:create"
     fake_client.guest_power.return_value = "UPID:start"
@@ -1130,12 +1136,13 @@ def test_vm_new_image_creates_cloudinit_vm(fake_client, creds, tmp_path, monkeyp
     create_kwargs = fake_client.create_guest.call_args.kwargs
     assert create_kwargs["ide2"] == "local-lvm:cloudinit"
     assert create_kwargs["ciuser"] == "ubuntu"
-    assert "import-from=local-lvm:import/noble-server-cloudimg-amd64.qcow2" in create_kwargs["scsi0"]
+    assert "import-from=local:import/noble-server-cloudimg-amd64.qcow2" in create_kwargs["scsi0"]
     fake_client.resize_disk.assert_called_once_with(node="pve1", kind="qemu", vmid=150, disk="scsi0", size="50G")
 
 
 def test_vm_new_image_dry_run_prints_plan(fake_client, creds):
     fake_client.storage_content.return_value = []
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
     r = inv(["--dry-run", "vm", "new", "web", "--image", "ubuntu-24.04", "--node", "pve1", "--vmid", "150"], creds)
     assert r.exit_code == 0, r.output
     payload = json.loads(r.output)
@@ -1146,6 +1153,7 @@ def test_vm_new_image_dry_run_prints_plan(fake_client, creds):
 
 def test_vm_new_image_needs_dangerous(fake_client, creds):
     fake_client.storage_content.return_value = []
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
     r = inv(["vm", "new", "web", "--image", "ubuntu-24.04", "--node", "pve1", "--vmid", "150"], creds)
     assert r.exit_code == 4, r.output
     fake_client.create_guest.assert_not_called()
@@ -1162,6 +1170,7 @@ def test_vm_new_blank_still_works(fake_client, creds):
 def test_vm_new_image_passes_o_options(fake_client, creds, monkeypatch):
     monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
     fake_client.storage_content.return_value = []
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
     fake_client.download_url.return_value = "UPID:dl"
     fake_client.create_guest.return_value = "UPID:create"
     fake_client.guest_power.return_value = "UPID:start"
@@ -1173,6 +1182,43 @@ def test_vm_new_image_passes_o_options(fake_client, creds, monkeypatch):
     )
     assert r.exit_code == 0, r.output
     assert fake_client.create_guest.call_args.kwargs["agent"] == "0"
+
+
+def test_vm_new_image_auto_routes_off_lvmthin(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.storage_content.return_value = []
+    fake_client.download_url.return_value = "UPID:dl"
+    fake_client.create_guest.return_value = "UPID:create"
+    fake_client.guest_power.return_value = "UPID:start"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--dangerous", "vm", "new", "web", "--image", "ubuntu-24.04",
+             "--node", "pve1", "--vmid", "150", "--storage", "local-lvm"], creds)
+    assert r.exit_code == 0, r.output
+    assert fake_client.download_url.call_args.kwargs["storage"] == "local"
+
+
+def test_vm_new_image_explicit_import_storage(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.storage_content.return_value = []
+    fake_client.download_url.return_value = "UPID:dl"
+    fake_client.create_guest.return_value = "UPID:create"
+    fake_client.guest_power.return_value = "UPID:start"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--dangerous", "vm", "new", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+             "--vmid", "150", "--import-storage", "local"], creds)
+    assert r.exit_code == 0, r.output
+    assert fake_client.download_url.call_args.kwargs["storage"] == "local"
+
+
+def test_vm_new_image_no_import_storage_errors(fake_client, creds):
+    fake_client.list_storage.return_value = [
+        {"storage": "local-lvm", "content": "images,rootdir", "plugintype": "lvmthin"},
+    ]
+    r = inv(["--dangerous", "vm", "new", "web", "--image", "ubuntu-24.04", "--node", "pve1", "--vmid", "150"], creds)
+    assert r.exit_code == 1, r.output
+    fake_client.create_guest.assert_not_called()
 
 
 # ------------------------------------------------- Task 6 (C1): image list + image pull --

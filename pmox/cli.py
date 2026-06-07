@@ -812,6 +812,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
             size: str = typer.Option("small", "--size", help="Sizing profile: small | medium | large."),
             disk: Optional[int] = typer.Option(None, "--disk", help="Disk size in GiB."),
             storage: str = typer.Option("local-lvm", "--storage", help="Storage for the disk/cloud-init."),
+            import_storage: Optional[str] = typer.Option(None, "--import-storage", help="Storage to hold the imported image (default: auto-detect one with 'import' content)."),
             node: Optional[str] = typer.Option(None, "--node", "-n", help="Node (auto-picked if one node)."),
             vmid: Optional[int] = typer.Option(None, "--vmid", help="VMID (auto-assigned if omitted)."),
             option: Optional[List[str]] = typer.Option(None, "--option", "-o", help="Extra create param key=value."),
@@ -861,6 +862,11 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
 
                 if image:
                     sshkeys = "\n".join(Path(p).read_text().strip() for p in (ssh_key or [])) or None
+                    needs_import = catalog.resolve_image(image)["kind"] != "volid"
+                    resolved_import = (
+                        provision.resolve_import_storage(client, target_node, import_storage)
+                        if needs_import else None
+                    )
                     plan = provision.build_vm_image_plan(
                         client,
                         node=target_node,
@@ -870,6 +876,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                         memory=profile["memory"],
                         disk=disk,
                         storage=storage,
+                        import_storage=resolved_import,
                         image=image,
                         sshkeys=sshkeys,
                         ipconfig=provision.build_ipconfig(ip) if ip else None,
