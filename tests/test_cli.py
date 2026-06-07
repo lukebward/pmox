@@ -1126,3 +1126,38 @@ def test_vm_new_from_template_resolve_fails(fake_client, creds):
     r = inv(["--dangerous", "vm", "new", "web", "--from-template", "9000", "--vmid", "120"], creds)
     assert r.exit_code == 1, r.output
     fake_client.clone_guest.assert_not_called()
+
+
+# ------------------------------------------------- Task 5 (C2): image pull --as-template --
+
+
+def test_image_pull_as_template_builds_template(fake_client, creds, monkeypatch):
+    import pmox.cli as cli
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.storage_content.return_value = []
+    fake_client.download_url.return_value = "UPID:dl"
+    fake_client.create_guest.return_value = "UPID:create"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--dangerous", "image", "pull", "ubuntu-24.04", "--storage", "local", "--node", "pve1",
+             "--as-template", "--vmid", "9000"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.create_guest.assert_called_once()
+    fake_client.convert_to_template.assert_called_once_with(node="pve1", kind="qemu", vmid=9000)
+
+
+def test_image_pull_as_template_dry_run(fake_client, creds):
+    fake_client.storage_content.return_value = []
+    r = inv(["--dry-run", "image", "pull", "ubuntu-24.04", "--storage", "local", "--node", "pve1",
+             "--as-template", "--vmid", "9000"], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["op"] == "image.pull.template"
+    assert payload["plan"][-1]["op"] == "convert_to_template"
+    fake_client.create_guest.assert_not_called()
+
+
+def test_image_pull_as_template_needs_dangerous(fake_client, creds):
+    fake_client.storage_content.return_value = []
+    r = inv(["image", "pull", "ubuntu-24.04", "--storage", "local", "--node", "pve1", "--as-template", "--vmid", "9000"], creds)
+    assert r.exit_code == 4, r.output
+    fake_client.create_guest.assert_not_called()

@@ -1134,6 +1134,9 @@ def image_pull(
     image: str = typer.Argument(..., help="Catalog name or https URL."),
     storage: str = typer.Option(..., "--storage", help="Target storage (needs the 'import' content type)."),
     node: str = typer.Option(..., "--node", "-n", help="Node to download on."),
+    as_template: bool = typer.Option(False, "--as-template", help="Build a reusable golden VM template instead of just downloading."),
+    vmid: Optional[int] = typer.Option(None, "--vmid", help="VMID for the template (auto-assigned if omitted). Used with --as-template."),
+    name: Optional[str] = typer.Option(None, "--name", help="Name for the template. Used with --as-template."),
 ):
     """Download a VM cloud image to a storage (cached; needs --dangerous)."""
     with error_boundary(ctx.obj.json):
@@ -1141,6 +1144,18 @@ def image_pull(
         spec = catalog.resolve_image(image)
         if spec["kind"] == "volid":
             raise ValueError("image pull expects a catalog name or URL, not an existing volid.")
+
+        if as_template:
+            target_vmid = vmid if vmid is not None else int(client.cluster_nextid())
+            plan = provision.build_template_plan(client, node=node, vmid=target_vmid, name=name, storage=storage, image=image)
+            if ctx.obj.dry_run:
+                print(json.dumps({"dry_run": True, "op": "image.pull.template", "node": node, "plan": plan}, default=str, indent=2))
+                return
+            require_dangerous(ctx.obj.dangerous)
+            provision.execute_plan(client, node, plan, waiter=lambda n, upid: _maybe_wait(ctx, n, upid))
+            _ok(ctx, f"Built template {target_vmid} on {node} from {image}")
+            return
+
         volid = f"{storage}:import/{spec['filename']}"
         if ctx.obj.dry_run:
             print(json.dumps({"dry_run": True, "op": "image.pull", "node": node, "params": {"volid": volid, "url": spec["url"]}}, default=str, indent=2))
