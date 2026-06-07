@@ -25,6 +25,13 @@ ENV_TOKEN_ID = "PROXMOX_TOKEN_ID"
 ENV_TOKEN_SECRET = "PROXMOX_TOKEN_SECRET"
 ENV_VERIFY_SSL = "PROXMOX_VERIFY_SSL"
 ENV_TIMEOUT = "PROXMOX_TIMEOUT"
+ENV_NET_CIDR = "PROXMOX_NET_CIDR"
+ENV_NET_GATEWAY = "PROXMOX_NET_GATEWAY"
+ENV_NET_POOL = "PROXMOX_NET_POOL"
+ENV_NET_NAMESERVER = "PROXMOX_NET_NAMESERVER"
+ENV_DEFAULT_IMPORT_STORAGE = "PROXMOX_DEFAULT_IMPORT_STORAGE"
+ENV_DEFAULT_SSH_KEY = "PROXMOX_DEFAULT_SSH_KEY"
+ENV_DEFAULT_CIUSER = "PROXMOX_DEFAULT_CIUSER"
 
 
 class ConfigError(Exception):
@@ -47,6 +54,13 @@ class Settings:
     token_secret: Optional[str] = None
     verify_ssl: bool = False  # default OFF: homelab Proxmox uses self-signed certs
     timeout: int = DEFAULT_TIMEOUT
+    net_cidr: Optional[str] = None
+    net_gateway: Optional[str] = None
+    net_pool: Optional[str] = None
+    net_nameserver: Optional[str] = None
+    default_import_storage: Optional[str] = None
+    default_ssh_key: Optional[str] = None
+    default_ciuser: Optional[str] = None
 
     @property
     def user(self) -> Optional[str]:
@@ -99,9 +113,6 @@ def _load_config_file(path: Path) -> dict:
         raise ConfigError("tomllib is unavailable on this Python; cannot read a config file.")
     with path.open("rb") as handle:
         data = tomllib.load(handle)
-    # Accept either top-level keys or a [proxmox] table.
-    if isinstance(data.get("proxmox"), dict):
-        return data["proxmox"]
     return data
 
 
@@ -115,8 +126,9 @@ def _coerce(source: dict, *, keys: dict) -> dict:
 
 
 def _from_file(data: dict) -> dict:
-    return _coerce(
-        data,
+    conn = data["proxmox"] if isinstance(data.get("proxmox"), dict) else data
+    out = _coerce(
+        conn,
         keys={
             "host": ("host", str),
             "port": ("port", int),
@@ -126,6 +138,24 @@ def _from_file(data: dict) -> dict:
             "timeout": ("timeout", int),
         },
     )
+    out.update(_coerce(
+        data.get("network") or {},
+        keys={
+            "net_cidr": ("cidr", str),
+            "net_gateway": ("gateway", str),
+            "net_pool": ("pool", str),
+            "net_nameserver": ("nameserver", str),
+        },
+    ))
+    out.update(_coerce(
+        data.get("defaults") or {},
+        keys={
+            "default_import_storage": ("import_storage", str),
+            "default_ssh_key": ("ssh_key", str),
+            "default_ciuser": ("ciuser", str),
+        },
+    ))
+    return out
 
 
 def _from_env(env: dict) -> dict:
@@ -137,6 +167,13 @@ def _from_env(env: dict) -> dict:
             "token_id": (ENV_TOKEN_ID, str),
             "token_secret": (ENV_TOKEN_SECRET, str),
             "timeout": (ENV_TIMEOUT, int),
+            "net_cidr": (ENV_NET_CIDR, str),
+            "net_gateway": (ENV_NET_GATEWAY, str),
+            "net_pool": (ENV_NET_POOL, str),
+            "net_nameserver": (ENV_NET_NAMESERVER, str),
+            "default_import_storage": (ENV_DEFAULT_IMPORT_STORAGE, str),
+            "default_ssh_key": (ENV_DEFAULT_SSH_KEY, str),
+            "default_ciuser": (ENV_DEFAULT_CIUSER, str),
         },
     )
     # verify_ssl is a special case: an explicit "false" must be honoured.

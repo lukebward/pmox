@@ -85,3 +85,44 @@ def test_token_properties_without_token_id():
     s = Settings()
     assert s.user is None
     assert s.token_name is None
+
+
+def test_network_and_defaults_from_file(tmp_path):
+    cfg = tmp_path / "c.toml"
+    cfg.write_text(textwrap.dedent(
+        """
+        [proxmox]
+        host = "h"
+        [network]
+        cidr = "192.168.0.0/24"
+        gateway = "192.168.0.1"
+        pool = "192.168.0.200-192.168.0.250"
+        nameserver = "1.1.1.1"
+        [defaults]
+        import_storage = "local"
+        ssh_key = "~/.ssh/id_ed25519.pub"
+        ciuser = "ubuntu"
+        """
+    ))
+    s = load_settings(env={}, config_path=cfg)
+    assert s.host == "h"
+    assert s.net_cidr == "192.168.0.0/24"
+    assert s.net_gateway == "192.168.0.1"
+    assert s.net_pool == "192.168.0.200-192.168.0.250"
+    assert s.net_nameserver == "1.1.1.1"
+    assert s.default_import_storage == "local"
+    assert s.default_ssh_key == "~/.ssh/id_ed25519.pub"
+    assert s.default_ciuser == "ubuntu"
+
+
+def test_network_env_overrides_file(tmp_path):
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[network]\ncidr = "10.0.0.0/24"\n')
+    s = load_settings(env={"PROXMOX_NET_CIDR": "192.168.5.0/24"}, config_path=cfg)
+    assert s.net_cidr == "192.168.5.0/24"
+
+
+def test_network_unset_defaults_none(tmp_path):
+    s = load_settings(env={}, config_path=tmp_path / "none.toml")
+    assert s.net_cidr is None
+    assert s.default_ciuser is None
