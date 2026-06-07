@@ -32,6 +32,7 @@ def describe_guest(client, kind: str, vmid: int, node: Optional[str] = None) -> 
         "config": client.guest_config(node, kind, vmid),
         "snapshots": client.list_snapshots(node, kind, vmid),
         "recent_tasks": tasks,
+        "network": _safe_ip_addresses(client, kind, vmid, node),
     }
 
 
@@ -106,6 +107,14 @@ def _primary_ipv4(interfaces):
             if a["family"] == "ipv4" and a["scope"] == "global":
                 return a["address"]
     return None
+
+
+def _safe_ip_addresses(client, kind, vmid, node) -> dict:
+    """guest_ip_addresses wrapped for embedding in describe: never raises."""
+    try:
+        return {"available": True, **guest_ip_addresses(client, kind, vmid, node=node)}
+    except Exception as exc:  # noqa: BLE001 - describe must not break if the agent is down
+        return {"available": False, "reason": str(exc)}
 
 
 def guest_ip_addresses(client, kind: str, vmid: int, node: Optional[str] = None) -> dict:

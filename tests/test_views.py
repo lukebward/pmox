@@ -15,6 +15,9 @@ def _client():
         {"id": "100", "type": "qmstart"},
         {"id": "999", "type": "qmstart"},
     ]
+    c.cluster_resources.return_value = [{"vmid": 100, "node": "pve1", "name": "web"}]
+    c.agent_network_interfaces.return_value = {"result": []}
+    c.lxc_interfaces.return_value = []
     return c
 
 
@@ -44,6 +47,25 @@ def test_describe_guest_not_found_raises():
     c.resolve_node.return_value = None
     with pytest.raises(LookupError):
         views.describe_guest(c, "qemu", 999)
+
+
+def test_describe_guest_embeds_network():
+    c = _client()
+    c.agent_network_interfaces.return_value = {"result": [
+        {"name": "eth0", "hardware-address": "x",
+         "ip-addresses": [{"ip-address-type": "ipv4", "ip-address": "10.0.0.9", "prefix": 24}]}
+    ]}
+    out = views.describe_guest(c, "qemu", 100)
+    assert out["network"]["available"] is True
+    assert out["network"]["primary"] == "10.0.0.9"
+
+
+def test_describe_guest_network_degrades_when_agent_down():
+    c = _client()
+    c.agent_network_interfaces.side_effect = RuntimeError("agent down")
+    out = views.describe_guest(c, "qemu", 100)
+    assert out["network"]["available"] is False
+    assert "reason" in out["network"]
 
 
 def _health_client():
