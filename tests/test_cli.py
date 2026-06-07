@@ -873,3 +873,79 @@ def test_health_human(fake_client, creds):
     r = inv(["--no-json", "health"], creds)
     assert r.exit_code == 0, r.output
     assert "p1" in plain(r.output)
+
+
+# ------------------------------------------------- Task 6: vm new command --
+
+
+def test_vm_new_with_profile_explicit_node_and_vmid(fake_client, creds):
+    r = inv(["--dangerous", "vm", "new", "web", "--size", "medium", "--node", "pve1", "--vmid", "105"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.create_guest.assert_called_once_with(
+        "pve1", "qemu", 105,
+        cores=2, memory=4096, scsihw="virtio-scsi-single", net0="virtio,bridge=vmbr0",
+        ostype="l26", name="web",
+    )
+    fake_client.cluster_nextid.assert_not_called()
+
+
+def test_vm_new_auto_vmid(fake_client, creds):
+    fake_client.cluster_nextid.return_value = "150"
+    r = inv(["--dangerous", "vm", "new", "--node", "pve1"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.cluster_nextid.assert_called_once_with()
+    args, kwargs = fake_client.create_guest.call_args
+    assert args[2] == 150  # vmid coerced to int
+
+
+def test_vm_new_auto_node_single(fake_client, creds):
+    fake_client.list_nodes.return_value = [{"node": "only"}]
+    fake_client.cluster_nextid.return_value = "150"
+    r = inv(["--dangerous", "vm", "new", "--vmid", "150"], creds)
+    assert r.exit_code == 0, r.output
+    assert fake_client.create_guest.call_args.args[0] == "only"
+
+
+def test_vm_new_auto_node_multiple_errors(fake_client, creds):
+    fake_client.list_nodes.return_value = [{"node": "a"}, {"node": "b"}]
+    r = inv(["--dangerous", "vm", "new", "--vmid", "150"], creds)
+    assert r.exit_code == 1, r.output
+    fake_client.create_guest.assert_not_called()
+
+
+def test_vm_new_with_disk(fake_client, creds):
+    r = inv(["--dangerous", "vm", "new", "--node", "pve1", "--vmid", "150", "--disk", "50"], creds)
+    assert r.exit_code == 0, r.output
+    kwargs = fake_client.create_guest.call_args.kwargs
+    assert kwargs["scsi0"] == "local-lvm:50,iothread=1"
+    assert kwargs["boot"] == "order=scsi0"
+
+
+def test_vm_new_option_override(fake_client, creds):
+    r = inv(["--dangerous", "vm", "new", "--node", "pve1", "--vmid", "150", "-o", "cores=8"], creds)
+    assert r.exit_code == 0, r.output
+    assert fake_client.create_guest.call_args.kwargs["cores"] == "8"
+
+
+def test_vm_new_bad_size(fake_client, creds):
+    r = inv(["--dangerous", "vm", "new", "--node", "pve1", "--vmid", "150", "--size", "huge"], creds)
+    assert r.exit_code == 1, r.output
+    fake_client.create_guest.assert_not_called()
+
+
+def test_vm_new_needs_dangerous(fake_client, creds):
+    r = inv(["vm", "new", "--node", "pve1", "--vmid", "150"], creds)
+    assert r.exit_code == 4, r.output
+    fake_client.create_guest.assert_not_called()
+
+
+def test_vm_new_dry_run(fake_client, creds):
+    r = inv(["--dry-run", "vm", "new", "--node", "pve1", "--vmid", "150"], creds)
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["op"] == "qemu.new"
+    fake_client.create_guest.assert_not_called()
+
+
+def test_ct_has_no_new(fake_client, creds):
+    r = inv(["ct", "new", "box"], creds)
+    assert r.exit_code != 0  # no such command for containers

@@ -30,7 +30,7 @@ from typing import List, Optional
 
 import typer
 
-from . import __version__, views
+from . import __version__, catalog, views
 from .client import ProxmoxClient
 from .config import ConfigError, Settings, _parse_bool, load_settings
 from .output import (
@@ -180,6 +180,14 @@ def _resolve_node_or_die(client: ProxmoxClient, vmid: int) -> str:
         )
         raise typer.Exit(1)
     return node
+
+
+def _single_node_or_die(client: ProxmoxClient) -> str:
+    """Return the only node's name, or error if the cluster has 0 or >1 nodes."""
+    nodes = client.list_nodes()
+    if len(nodes) == 1:
+        return nodes[0]["node"]
+    raise ValueError("Cluster has multiple nodes; pass --node to choose where to create.")
 
 
 _POLL_SECONDS = 2
@@ -725,6 +733,40 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 call=lambda: client.create_guest(node, kind, vmid, **params),
                 params={"vmid": vmid, **params},
             )
+
+    if kind == "qemu":
+
+        @group.command("new", help="Create a VM with a sizing profile and sane defaults.")
+        def _new(
+            ctx: typer.Context,
+            name: Optional[str] = typer.Argument(None, help="VM name (optional)."),
+            size: str = typer.Option("small", "--size", help="Sizing profile: small | medium | large."),
+            disk: Optional[int] = typer.Option(None, "--disk", help="Disk size in GiB (created on --storage)."),
+            storage: str = typer.Option("local-lvm", "--storage", help="Storage for the disk."),
+            node: Optional[str] = typer.Option(None, "--node", "-n", help="Node (auto-picked if the cluster has one node)."),
+            vmid: Optional[int] = typer.Option(None, "--vmid", help="VMID (auto-assigned from the cluster if omitted)."),
+            option: Optional[List[str]] = typer.Option(None, "--option", "-o", help="Extra create param key=value (repeatable)."),
+        ):
+            with error_boundary(ctx.obj.json):
+                client = _get_client(ctx)
+                target_node = node or _single_node_or_die(client)
+                target_vmid = vmid if vmid is not None else int(client.cluster_nextid())
+                params = catalog.size_params(size)
+                params.update({"scsihw": "virtio-scsi-single", "net0": "virtio,bridge=vmbr0", "ostype": "l26"})
+                if name:
+                    params["name"] = name
+                if disk:
+                    params["scsi0"] = f"{storage}:{disk},iothread=1"
+                    params["boot"] = "order=scsi0"
+                params.update(parse_options(option))
+                _execute(
+                    ctx,
+                    op="qemu.new",
+                    message=f"Create VM {target_vmid} on {target_node}",
+                    node=target_node,
+                    call=lambda: client.create_guest(target_node, "qemu", target_vmid, **params),
+                    params={"vmid": target_vmid, **params},
+                )
 
     @group.command("clone")
     def _clone(
