@@ -2115,6 +2115,193 @@ def test_json_mode_from_argv_ignores_after_double_dash(monkeypatch):
     assert cli._json_mode_from_argv(["vm", "list", "--", "--json"]) is False
 
 
+# ------------------------------------------------- guide / ip --wait / fields --
+
+
+def test_guide_prints_agent_guide(creds):
+    r = inv(["guide"], creds)
+    assert r.exit_code == 0, r.output
+    out = r.output
+    assert "--dangerous" in out
+    assert "exit" in out.lower()
+    assert "envelope" in out.lower()
+    assert "task wait" in out
+
+
+def test_guide_needs_no_credentials():
+    r = runner.invoke(cli.app, ["guide"], env={"PMOX_CONFIG": "/nonexistent-pmox-config.toml"})
+    assert r.exit_code == 0, r.output
+    assert "--dangerous" in r.output
+
+
+def test_vm_ip_wait_polls_until_address(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.locate_guest.return_value = _ip_row()
+    fake_client.agent_network_interfaces.side_effect = [
+        {"result": []},  # agent up, no address yet
+        {"result": [{"name": "eth0", "hardware-address": "m", "ip-addresses": [
+            {"ip-address-type": "ipv4", "ip-address": "192.168.1.50", "prefix": 24}]}]},
+    ]
+    r = inv(["--json", "--wait", "vm", "ip", "150"], creds)
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["primary"] == "192.168.1.50"
+    assert fake_client.agent_network_interfaces.call_count == 2
+
+
+def test_vm_ip_wait_retries_through_agent_errors(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.locate_guest.return_value = _ip_row()
+    fake_client.guest_config.return_value = {}  # no static ipconfig fallback
+    calls = {"n": 0}
+
+    def agent(node, vmid):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("guest agent is not running")
+        return {"result": [{"name": "eth0", "hardware-address": "m", "ip-addresses": [
+            {"ip-address-type": "ipv4", "ip-address": "10.0.0.9", "prefix": 24}]}]}
+
+    fake_client.agent_network_interfaces.side_effect = agent
+    r = inv(["--json", "--wait", "vm", "ip", "150"], creds)
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["primary"] == "10.0.0.9"
+
+
+def test_vm_ip_wait_times_out_with_hint(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(cli.time, "monotonic", iter(float(i) for i in range(100)).__next__)
+    fake_client.locate_guest.return_value = _ip_row()
+    fake_client.agent_network_interfaces.return_value = {"result": []}
+    r = inv(["--json", "--wait", "--timeout", "3", "vm", "ip", "150"], creds)
+    assert r.exit_code == 1, r.output
+    payload = json.loads(r.output)
+    assert "did not report an IP" in payload["message"]
+    assert payload["vmid"] == 150
+    assert "hint" in payload
+
+
+def test_vm_ip_wait_guest_not_found_fails_immediately(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.locate_guest.return_value = None
+    r = inv(["--json", "--wait", "vm", "ip", "999"], creds)
+    assert r.exit_code == 1, r.output
+    assert "not found" in json.loads(r.output)["message"]
+    fake_client.agent_network_interfaces.assert_not_called()
+
+
+def test_vm_list_fields_filter(fake_client, creds):
+    fake_client.list_guests.return_value = [
+        {"vmid": 100, "name": "web", "status": "running", "cpu": 0.5, "mem": 123, "node": "p1"},
+    ]
+    r = inv(["--json", "vm", "list", "--fields", "vmid,name,status"], creds)
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output) == [{"vmid": 100, "name": "web", "status": "running"}]
+
+
+def test_fields_missing_keys_become_null(fake_client, creds):
+    fake_client.list_guests.return_value = [{"vmid": 100}]
+    r = inv(["--json", "vm", "list", "--fields", "vmid,name"], creds)
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output) == [{"vmid": 100, "name": None}]
+
+
+def test_fields_empty_errors(fake_client, creds):
+    fake_client.list_guests.return_value = []
+    r = inv(["--json", "vm", "list", "--fields", " , "], creds)
+    assert r.exit_code == 1, r.output
+
+
+def test_fields_table_mode_shows_only_selected(fake_client, creds):
+    fake_client.list_guests.return_value = [{"vmid": 100, "name": "web", "status": "running"}]
+    r = inv(["--no-json", "vm", "list", "--fields", "vmid,name"], creds)
+    assert r.exit_code == 0, r.output
+    out = plain(r.output)
+    assert "web" in out and "running" not in out
+
+
+def test_fields_on_cluster_resources(fake_client, creds):
+    fake_client.cluster_resources.return_value = [{"type": "vm", "vmid": 100, "extra": 1}]
+    r = inv(["--json", "cluster", "resources", "--fields", "vmid"], creds)
+    assert json.loads(r.output) == [{"vmid": 100}]
+
+
+def test_fields_on_nodes_list(fake_client, creds):
+    fake_client.list_nodes.return_value = [{"node": "p1", "status": "online", "cpu": 1}]
+    r = inv(["--json", "nodes", "list", "--fields", "node"], creds)
+    assert json.loads(r.output) == [{"node": "p1"}]
+
+
+def test_fields_on_storage_list_and_content(fake_client, creds):
+    fake_client.cluster_resources.return_value = [{"storage": "local", "node": "p1", "disk": 5}]
+    r = inv(["--json", "storage", "list", "--fields", "storage"], creds)
+    assert json.loads(r.output) == [{"storage": "local"}]
+    fake_client.list_nodes.return_value = [{"node": "only"}]
+    fake_client.storage_content.return_value = [{"volid": "x", "size": 1}]
+    r2 = inv(["--json", "storage", "content", "local", "--fields", "volid"], creds)
+    assert json.loads(r2.output) == [{"volid": "x"}]
+
+
+def test_fields_on_task_list(fake_client, creds):
+    fake_client.list_nodes.return_value = [{"node": "only"}]
+    fake_client.list_tasks.return_value = [{"upid": "U", "type": "x", "extra": 2}]
+    r = inv(["--json", "task", "list", "--fields", "upid"], creds)
+    assert json.loads(r.output) == [{"upid": "U"}]
+
+
+def test_fields_on_image_list_both_modes(fake_client, creds):
+    r = inv(["--json", "image", "list", "--fields", "name"], creds)
+    rows = json.loads(r.output)
+    assert all(set(row) == {"name"} for row in rows)
+    fake_client.list_nodes.return_value = [{"node": "only"}]
+    fake_client.list_appliances.return_value = [{"template": "t1", "os": "x"}]
+    r2 = inv(["--json", "image", "list", "--ct", "--fields", "template"], creds)
+    assert json.loads(r2.output) == [{"template": "t1"}]
+
+
+# ------------------------------------------------- dangerous-mode hardening --
+
+
+def test_no_dangerous_flag_overrides_env(fake_client, creds):
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
+    r = inv(["--no-dangerous", "vm", "start", "100"], dict(creds, PMOX_DANGEROUS="1"))
+    assert r.exit_code == 4, r.output
+    fake_client.guest_power.assert_not_called()
+
+
+def test_dangerous_from_dotenv_is_ignored(fake_client, creds, monkeypatch):
+    import os as os_mod
+
+    import dotenv
+
+    def sneaky_load_dotenv(*a, **k):
+        os_mod.environ["PMOX_DANGEROUS"] = "1"  # a .env in cwd tries to enable the gate
+
+    monkeypatch.setattr(dotenv, "load_dotenv", sneaky_load_dotenv)
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
+    try:
+        r = inv(["vm", "start", "100"], creds)
+        assert r.exit_code == 4, r.output  # the gate only honors the real environment
+        fake_client.guest_power.assert_not_called()
+    finally:
+        os_mod.environ.pop("PMOX_DANGEROUS", None)
+
+
+def test_hoist_no_dangerous_flag():
+    assert cli.hoist_global_flags(["vm", "start", "100", "--no-dangerous"]) == [
+        "--no-dangerous", "vm", "start", "100",
+    ]
+
+
+def test_malformed_config_emits_json_envelope(tmp_path):
+    bad = tmp_path / "bad.toml"
+    bad.write_text("this is not == toml")
+    r = runner.invoke(cli.app, ["--json", "--config", str(bad), "nodes", "list"], env={})
+    assert r.exit_code == 2, r.output
+    payload = json.loads(r.output)
+    assert payload["ok"] is False and payload["error"] == "config"
+    assert "TOML" in payload["message"]
+
+
 # ------------------------------------------------- provisioning ergonomics --
 
 

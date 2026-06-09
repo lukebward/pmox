@@ -36,7 +36,7 @@ try:  # typer >= 0.26 vendors click as typer._click; older typer uses the real p
 except ModuleNotFoundError:
     from typer import _click as click
 
-from . import __version__, catalog, ipam, provision, views
+from . import __version__, catalog, guide, ipam, provision, views
 from .client import ProxmoxClient
 from .config import ConfigError, Settings, _parse_bool, load_settings
 from .errors import PlanError, PmoxError, TaskFailed, TaskTimeout
@@ -67,6 +67,7 @@ _GLOBAL_BOOL_FLAGS = frozenset(
         "--json",
         "--no-json",
         "--dangerous",
+        "--no-dangerous",
         "--verify-ssl",
         "--no-verify-ssl",
         "--wait",
@@ -211,6 +212,14 @@ def _node_for_task(node: Optional[str], upid: str) -> str:
     if not resolved:
         raise ValueError(f"Cannot determine the node from {upid!r}; pass --node explicitly.")
     return resolved
+
+
+def _select_fields(rows: List[dict], fields: str) -> List[dict]:
+    """Project list rows onto a comma-separated subset of keys (missing keys → null)."""
+    keys = [k.strip() for k in fields.split(",") if k.strip()]
+    if not keys:
+        raise ValueError("--fields needs at least one field name.")
+    return [{k: r.get(k) for k in keys} for r in rows]
 
 
 _POLL_SECONDS = 2
@@ -437,6 +446,10 @@ def error_boundary(json_output: bool = False):
 vmid_arg = typer.Argument(..., metavar="VMID", help="Numeric VM/CT id.")
 node_opt = typer.Option(None, "--node", "-n", help="Node name (auto-resolved from the cluster if omitted).")
 yes_opt = typer.Option(False, "--yes", "-y", help="Confirm a destructive operation (required when non-interactive).")
+fields_opt = typer.Option(
+    None, "--fields",
+    help="Comma-separated keys to keep in list output (e.g. vmid,name,status); missing keys are null.",
+)
 
 
 # ---- column specifications ----
@@ -586,7 +599,8 @@ def _version_callback(value: bool):
 
 
 app = typer.Typer(
-    help="Explore and manage a Proxmox VE cluster from the command line (AI-friendly).",
+    help="Explore and manage a Proxmox VE cluster from the command line (AI-friendly). "
+    "Run `pmox guide` for the full agent guide.",
     no_args_is_help=True,
     add_completion=False,
 )
@@ -601,26 +615,37 @@ def main_callback(
         help="Force JSON or human tables. Default: auto — JSON when output is piped/captured "
         "(e.g. an AI driving the CLI), tables at an interactive terminal.",
     ),
-    dangerous: bool = typer.Option(
-        False, "--dangerous", help="Enable dangerous (write/management) mode. Default is read-only (safe for AI exploration)."
+    dangerous: Optional[bool] = typer.Option(
+        None,
+        "--dangerous/--no-dangerous",
+        help="Enable dangerous (write/management) mode. Default is read-only (safe for AI exploration); "
+        "--no-dangerous forces read-only even when PMOX_DANGEROUS is set.",
     ),
     wait: bool = typer.Option(
-        False, "--wait/--no-wait", help="Wait for the resulting task to finish and report its outcome."
+        False, "--wait/--no-wait",
+        help="Wait for the resulting task to finish and report its outcome "
+        "(provisioning commands always wait on their internal steps).",
     ),
-    timeout: int = typer.Option(600, "--timeout", help="Seconds to wait when --wait is set (default 600)."),
+    timeout: int = typer.Option(600, "--timeout", help="Seconds to wait on tasks (default 600)."),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Print the intended API call as JSON and exit without changing anything."
     ),
     host: Optional[str] = typer.Option(None, "--host", help="Proxmox host or IP."),
     port: Optional[int] = typer.Option(None, "--port", help="API port (default 8006)."),
     token_id: Optional[str] = typer.Option(None, "--token-id", help="API token id: user@realm!tokenname."),
-    token_secret: Optional[str] = typer.Option(None, "--token-secret", help="API token secret."),
+    token_secret: Optional[str] = typer.Option(
+        None, "--token-secret", help="API token secret (prefer the PROXMOX_TOKEN_SECRET env var; argv is visible in process listings)."
+    ),
     verify_ssl: Optional[bool] = typer.Option(None, "--verify-ssl/--no-verify-ssl", help="Verify TLS cert (default: no)."),
     config: Optional[str] = typer.Option(None, "--config", help="Path to a TOML config file."),
     version: Optional[bool] = typer.Option(
         None, "--version", callback=_version_callback, is_eager=True, help="Show pmox version and exit."
     ),
 ):
+    # The dangerous gate honors only the *real* environment — captured before a
+    # cwd .env gets loaded, so a stray project file can't silently enable writes.
+    env_dangerous = os.environ.get("PMOX_DANGEROUS")
+
     # Load a local .env if python-dotenv is available (never fatal).
     try:
         from dotenv import load_dotenv
@@ -628,6 +653,8 @@ def main_callback(
         load_dotenv()
     except Exception:
         pass
+
+    json_on = resolve_json_output(json_output, os.environ.get("PMOX_JSON"), _stream_isatty(sys.stdout))
 
     overrides = {
         "host": host,
@@ -640,11 +667,9 @@ def main_callback(
     try:
         settings = load_settings(config_path=config_path, overrides=overrides)
     except ConfigError as exc:
-        err_console.print(f"[red]Config error:[/red] {exc}")
-        raise typer.Exit(2)
+        _emit_error(json_on, "config", str(exc), 2)
 
-    json_on = resolve_json_output(json_output, os.environ.get("PMOX_JSON"), _stream_isatty(sys.stdout))
-    dangerous_on = dangerous or _parse_bool(os.environ.get("PMOX_DANGEROUS"))
+    dangerous_on = dangerous if dangerous is not None else _parse_bool(env_dangerous)
     ctx.obj = State(
         settings=settings,
         json_output=json_on,
@@ -653,6 +678,12 @@ def main_callback(
         timeout=timeout,
         dry_run=dry_run,
     )
+
+
+@app.command("guide")
+def guide_cmd():
+    """Print the agent/automation guide: safety model, exit codes, JSON envelopes, recipes."""
+    print(guide.GUIDE)
 
 
 @app.command("version")
@@ -686,11 +717,14 @@ nodes_app = typer.Typer(help="Inspect cluster nodes.", no_args_is_help=True)
 
 
 @nodes_app.command("list")
-def nodes_list(ctx: typer.Context):
+def nodes_list(ctx: typer.Context, fields: Optional[str] = fields_opt):
     """List all nodes and their resource usage."""
     with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
-        emit(client.list_nodes(), columns=NODE_COLUMNS, json_output=ctx.obj.json, title="Nodes")
+        rows = client.list_nodes()
+        if fields:
+            rows = _select_fields(rows, fields)
+        emit(rows, columns=None if fields else NODE_COLUMNS, json_output=ctx.obj.json, title="Nodes")
 
 
 @nodes_app.command("status")
@@ -699,6 +733,37 @@ def nodes_status(ctx: typer.Context, node: str = typer.Argument(..., help="Node 
     with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
         emit(client.node_status(node), json_output=ctx.obj.json, title=f"Node {node}")
+
+
+def _wait_for_ip(ctx: typer.Context, client, kind: str, vmid: int, node: Optional[str]) -> dict:
+    """Poll guest_ip_addresses until a primary address appears (bounded by --timeout).
+
+    Agent-not-up / guest-still-booting errors are retried; a missing guest fails
+    immediately (waiting won't make it appear).
+    """
+    deadline = time.monotonic() + ctx.obj.timeout
+    last_error: Optional[Exception] = None
+    while True:
+        try:
+            data = views.guest_ip_addresses(client, kind, vmid, node=node)
+            if data.get("primary"):
+                return data
+            last_error = None
+        except LookupError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - transient while the guest boots
+            last_error = exc
+        if time.monotonic() >= deadline:
+            detail = f" Last error: {last_error}" if last_error else ""
+            raise PmoxError(
+                f"Guest {vmid} did not report an IP address within {ctx.obj.timeout}s.{detail}",
+                extra={
+                    "vmid": vmid,
+                    "hint": "For VMs, ensure qemu-guest-agent is installed and running in the guest; "
+                            "for containers, ensure the guest is started.",
+                },
+            )
+        time.sleep(_POLL_SECONDS)
 
 
 def _warn_ignored_with_template(flags) -> None:
@@ -739,12 +804,15 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
     group = typer.Typer(help=f"Manage {label}s ({descr}).", no_args_is_help=True)
 
     @group.command("list")
-    def _list(ctx: typer.Context, node: Optional[str] = node_opt):
+    def _list(ctx: typer.Context, node: Optional[str] = node_opt, fields: Optional[str] = fields_opt):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
+            rows = client.list_guests(kind, node=node)
+            if fields:
+                rows = _select_fields(rows, fields)
             emit(
-                client.list_guests(kind, node=node),
-                columns=GUEST_COLUMNS,
+                rows,
+                columns=None if fields else GUEST_COLUMNS,
                 json_output=ctx.obj.json,
                 title=f"{label}s",
             )
@@ -777,7 +845,11 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 emit(data["snapshots"], columns=SNAPSHOT_COLUMNS, json_output=False, title="snapshots")
                 emit(data["recent_tasks"], columns=TASK_COLUMNS, json_output=False, title="recent tasks")
 
-    @group.command("ip", help=f"Show the live IP address(es) of a {label} (VM: via guest agent; CT: via interfaces).")
+    @group.command(
+        "ip",
+        help=f"Show the live IP address(es) of a {label} (VM: via guest agent; CT: via interfaces). "
+        "With --wait, poll until an address appears (bounded by --timeout).",
+    )
     def _ip(
         ctx: typer.Context,
         vmid: int = vmid_arg,
@@ -786,7 +858,10 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
     ):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
-            data = views.guest_ip_addresses(client, kind, vmid, node=node)
+            if ctx.obj.wait:
+                data = _wait_for_ip(ctx, client, kind, vmid, node)
+            else:
+                data = views.guest_ip_addresses(client, kind, vmid, node=node)
             if ctx.obj.json:
                 emit(data, json_output=True)
                 return
@@ -1404,13 +1479,15 @@ storage_app = typer.Typer(help="Inspect storage.", no_args_is_help=True)
 
 
 @storage_app.command("list")
-def storage_list(ctx: typer.Context, node: Optional[str] = node_opt):
+def storage_list(ctx: typer.Context, node: Optional[str] = node_opt, fields: Optional[str] = fields_opt):
     with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
         rows = client.cluster_resources(type="storage")
         if node:
             rows = [r for r in rows if r.get("node") == node]
-        emit(rows, columns=STORAGE_COLUMNS, json_output=ctx.obj.json, title="Storage")
+        if fields:
+            rows = _select_fields(rows, fields)
+        emit(rows, columns=None if fields else STORAGE_COLUMNS, json_output=ctx.obj.json, title="Storage")
 
 
 @storage_app.command("content")
@@ -1418,13 +1495,17 @@ def storage_content(
     ctx: typer.Context,
     storage: str = typer.Argument(..., help="Storage id."),
     node: Optional[str] = typer.Option(None, "--node", "-n", help="Node name (auto-picked on a single-node cluster)."),
+    fields: Optional[str] = fields_opt,
 ):
     with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
         resolved = node or _single_node_or_die(client)
+        rows = client.storage_content(resolved, storage)
+        if fields:
+            rows = _select_fields(rows, fields)
         emit(
-            client.storage_content(resolved, storage),
-            columns=CONTENT_COLUMNS,
+            rows,
+            columns=None if fields else CONTENT_COLUMNS,
             json_output=ctx.obj.json,
             title=f"{storage} content",
         )
@@ -1450,12 +1531,16 @@ def cluster_status(ctx: typer.Context):
 def cluster_resources(
     ctx: typer.Context,
     type: Optional[str] = typer.Option(None, "--type", help="Filter: vm | node | storage | sdn | pool."),
+    fields: Optional[str] = fields_opt,
 ):
     with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
+        rows = client.cluster_resources(type=type)
+        if fields:
+            rows = _select_fields(rows, fields)
         emit(
-            client.cluster_resources(type=type),
-            columns=RESOURCE_COLUMNS,
+            rows,
+            columns=None if fields else RESOURCE_COLUMNS,
             json_output=ctx.obj.json,
             title="Cluster resources",
         )
@@ -1470,11 +1555,15 @@ def task_list(
     ctx: typer.Context,
     node: Optional[str] = typer.Option(None, "--node", "-n", help="Node name (auto-picked on a single-node cluster)."),
     limit: int = typer.Option(50, "--limit", help="Max tasks to show."),
+    fields: Optional[str] = fields_opt,
 ):
     with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
         resolved = node or _single_node_or_die(client)
-        emit(client.list_tasks(resolved, limit=limit), columns=TASK_COLUMNS, json_output=ctx.obj.json, title=f"{resolved} tasks")
+        rows = client.list_tasks(resolved, limit=limit)
+        if fields:
+            rows = _select_fields(rows, fields)
+        emit(rows, columns=None if fields else TASK_COLUMNS, json_output=ctx.obj.json, title=f"{resolved} tasks")
 
 
 @task_app.command("status")
@@ -1536,15 +1625,21 @@ def image_list(
     ctx: typer.Context,
     ct: bool = typer.Option(False, "--ct", help="List LXC container templates (live, from the node) instead of the VM catalog."),
     node: Optional[str] = typer.Option(None, "--node", "-n", help="Node for --ct (auto-picked on a single-node cluster)."),
+    fields: Optional[str] = fields_opt,
 ):
     """List VM cloud images (catalog) or, with --ct, container templates from a node."""
     with error_boundary(ctx.obj.json):
         if ct:
             client = _get_client(ctx)
             resolved = node or _single_node_or_die(client)
-            emit(client.list_appliances(resolved), json_output=ctx.obj.json, title="Container templates")
+            rows = client.list_appliances(resolved)
+            if fields:
+                rows = _select_fields(rows, fields)
+            emit(rows, json_output=ctx.obj.json, title="Container templates")
             return
         rows = [{"name": name, "url": e["url"], "filename": e["filename"]} for name, e in catalog.IMAGE_CATALOG.items()]
+        if fields:
+            rows = _select_fields(rows, fields)
         emit(rows, json_output=ctx.obj.json, title="Image catalog")
 
 
