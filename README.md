@@ -45,9 +45,17 @@ So:
 
 When running non-interactively (e.g. an AI calling the CLI), a destructive op
 *without* `--yes` is refused rather than silently prompted. Exit codes:
-`0` ok · `1` error · `2` config · `3` confirmation required · `4` read-only.
+`0` ok · `1` error/network · `2` config **or usage** error · `3` confirmation
+required · `4` read-only. (Exit 2 covers both missing config and a typo'd
+command line; the envelope's `error` field — `config` vs `usage` — tells them apart.)
 
-Under `--json`, errors are a JSON envelope `{"ok": false, "error": "...", "need": [...], "message": "..."}`.
+Under `--json`, errors are a JSON envelope `{"ok": false, "error": "...", "need": [...], "message": "..."}`
+with `error` one of `read_only` / `confirm_required` / `config` / `usage` /
+`network` / `error`, plus machine-actionable fields where relevant (`upid`,
+`node`, `vmid`, `completed_steps`, `failed_step`, `hint`). Successful mutations
+return `{"ok": true, "op": ..., "vmid": ..., "node": ..., "upid"|"task": ..., "message": ...}`
+— the created VMID is always a field, never just prose. Run **`pmox guide`**
+for the full agent guide (safety model, envelopes, recipes, recovery).
 
 ## Install
 
@@ -117,6 +125,7 @@ verify_ssl = false
 
 ```
 pmox version                         Proxmox version of the connected node
+pmox guide                           print the built-in agent/automation guide
 pmox health                          One-shot cluster health triage (read-only)
 pmox nodes list                      nodes + CPU/mem/uptime
 pmox nodes status <node>             detailed node status
@@ -127,7 +136,7 @@ pmox vm list [--node N]              QEMU VMs (cluster-wide)
 pmox vm status <vmid>                live status (node auto-resolved)
 pmox vm config <vmid>                raw configuration
 pmox vm describe <vmid>              consolidated view: status + config + snapshots + tasks
-pmox vm ip <vmid> [--all]            live IP(s) from the guest agent (--all: loopback/link-local/MAC)
+pmox vm ip <vmid> [--all] [--wait]   live IP(s) from the guest agent (--wait: poll until one appears)
 
 pmox vm set <vmid> -o key=val        update config (needs --dangerous; delete=key needs --yes)
 pmox vm resize <vmid> --disk D --size [+]G    grow a disk (needs --dangerous)
@@ -149,22 +158,28 @@ pmox ct describe <ctid>              consolidated view of a container
 pmox ct new [name] --template <t>    create container from template (needs --dangerous; see Provisioning)
 
 pmox storage list [--node N]         storage usage
-pmox storage content <id> --node N
-pmox task list --node N              recent tasks
-pmox task status|log <upid> --node N
+pmox storage content <id> [--node N]
+pmox task list [--node N]            recent tasks (node auto-picked on single-node clusters)
+pmox task status|log|wait <upid>     node parsed from the UPID; `wait` polls to completion
 
 pmox image list                      list VM cloud-image catalog
-pmox image list --ct --node N        list LXC container templates available on a node
-pmox image pull <name|url> --storage S --node N [--as-template]   download image (needs --dangerous)
+pmox image list --ct [--node N]      list LXC container templates available on a node
+pmox image pull <name|url> --storage S --node N [--as-template] [--checksum sha256:<hex>]
 ```
 
-`--node` is optional for guest commands — `pmox` finds which node a VMID lives on
-via the cluster resources endpoint.
+`--node` is optional almost everywhere — resolved from the VMID, parsed from a
+UPID, or auto-picked on single-node clusters (multi-node errors list the
+candidates). Using `vm ...` on a container VMID (or vice versa) errors with the
+corrective command. List commands accept `--fields vmid,name,status` to trim
+output to just those keys.
 
 Global flags are **position-independent** — they work before or after the subcommand:
-`--json/--no-json`, `--dangerous`, `--wait/--no-wait`, `--timeout <s>` (default 600),
-`--dry-run`, `--host`, `--port`, `--token-id`, `--token-secret`, `--verify-ssl/--no-verify-ssl`,
-`--config`.
+`--json/--no-json`, `--dangerous/--no-dangerous`, `--wait/--no-wait`, `--timeout <s>`
+(default 600), `--dry-run`, `--host`, `--port`, `--token-id`, `--token-secret`,
+`--verify-ssl/--no-verify-ssl`, `--config`. Provisioning commands always wait on
+their internal steps; if a wait times out, resume with `pmox task wait <upid>`.
+`PMOX_DANGEROUS=1` is honored from the real environment only — never from a
+`.env` file — and `--no-dangerous` forces read-only regardless.
 
 ## Provisioning
 
@@ -194,9 +209,10 @@ Proxmox volume ID. Cloud-init options: `--ssh-key` (repeatable), `--ip dhcp|<cid
 `import` content type enabled. pmox uses an API token, so it imports by volume ID
 (absolute paths would need `root@pam`).
 
-**No-checksum caveat:** catalog images are downloaded over HTTPS without checksum
-verification (no warning in v1). For integrity, supply `--image <url>` from a
-trusted source or a pre-verified image.
+**Checksum verification is opt-in:** catalog images download over HTTPS without
+integrity verification by default. Pre-pull with
+`pmox --dangerous image pull ubuntu-24.04 --checksum sha256:<hex> ...` to verify;
+the cached image is then reused by `vm new` / `vm up` / `--as-template`.
 
 ### Seamless one-shot VM (`vm up`)
 
@@ -206,9 +222,12 @@ Zero config — the VM gets its address via DHCP:
 pmox --dangerous vm up web --image ubuntu-24.04 --wait
 ```
 
-pmox routes the image import to a file-based storage, ensures an SSH key
-(generating `~/.ssh/id_ed25519.pub` if absent), and creates the VM. With DHCP the
-address isn't known on return (find it in your router's leases).
+pmox routes the image import to a file-based storage, picks a disk storage
+(local-lvm preferred; override with `--storage`), ensures an SSH key (generating
+`~/.ssh/id_ed25519.pub` if absent; `--ssh-key` is repeatable and `~` is expanded),
+and creates the VM. With DHCP the address isn't known on return — `pmox vm ip
+<vmid> --wait` polls for it once a guest agent is available, or check your
+router's leases.
 
 For a **known static IP**, either pass `--ip 192.168.0.50/24,gw=192.168.0.1`, or
 configure a pool once so pmox auto-allocates the lowest free address (scanning
@@ -227,7 +246,7 @@ is needed:
 
 ```
 pmox --dangerous vm up web --from-template 9000 --wait
-pmox vm ip <vmid>      # returns the DHCP-assigned address via the agent
+pmox vm ip <vmid> --wait   # polls until the agent reports the DHCP address
 ```
 
 Build that agent template once (pmox stays token-only, so this part is yours):
@@ -300,6 +319,10 @@ structured output to parse with no flag, while you still see tables at your own
 terminal. (Force it either way with `--json` / `--no-json`, or globally with
 `PMOX_JSON=1` / `PMOX_JSON=0`.)
 
+Tell the AI to run **`pmox guide`** first: it prints the complete agent guide —
+safety model, exit codes, envelope shapes, provisioning recipes, and recovery
+steps — so any agent self-onboards in one call, no plugin required.
+
 - Leave dangerous mode **off** for exploration. The AI literally cannot change
   anything without you adding `--dangerous` (and `--yes` for destructive ops),
   so accidental damage is impossible during read-only investigation.
@@ -350,10 +373,13 @@ pmox/
   config.py      Settings + precedence merge (file < env < flags)
   client.py      thin, injectable wrapper over proxmoxer (the only API surface)
   catalog.py     VM cloud-image catalog and container template discovery
-  views.py       composite read queries (describe, health)
-  provision.py   VM / container creation workflows (cloud-init, clones, ct new)
+  views.py       composite read queries (describe, health, guest lookup)
+  provision.py   VM / container creation workflows + fail-fast validation
+  ipam.py        token-only static IPv4 allocation (cluster config as ledger)
   output.py      Rich tables + plain JSON; byte/uptime/percent formatters
   safety.py      the two gates: require_dangerous() and confirm()
+  errors.py      typed errors carrying structured envelope fields (upid, hint, ...)
+  guide.py       the `pmox guide` text (agent onboarding)
   cli.py         Typer app wiring config + client + output + safety together
 ```
 

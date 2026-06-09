@@ -1,7 +1,7 @@
 ---
 name: proxmox
 description: Use when the user wants to inspect, manage, or provision their Proxmox VE cluster - VMs, LXC containers, nodes, storage, snapshots, tasks, cluster health, or creating new servers from cloud images and templates. Drives the `pmox` command-line tool (read-only by default; explicit gates before any change).
-allowed-tools: Bash(pmox:*), Bash(python:*)
+allowed-tools: Bash(pmox:*), Bash(python -m pmox:*)
 ---
 
 # Managing and Provisioning Proxmox with the `pmox` CLI
@@ -38,10 +38,17 @@ never `pmox --dangerous --yes vm delete 100`, which fails with `No such option:
 --yes`). Other per-subcommand options (`-n/--node`, `--purge`, `--target`,
 `-o/--option`) likewise go after the subcommand.
 
-If a command fails with a **config error (exit 2)**, the user hasn't configured
-credentials. Tell them to set `PROXMOX_HOST`, `PROXMOX_TOKEN_ID`, and
-`PROXMOX_TOKEN_SECRET` as environment variables (or in a `.env` file). pmox
-reads these automatically.
+**Exit 2 means config error OR usage error** — check the JSON envelope's
+`error` field. `"config"` → the user hasn't configured credentials: tell them to
+set `PROXMOX_HOST`, `PROXMOX_TOKEN_ID`, and `PROXMOX_TOKEN_SECRET` (env vars or
+a `.env` file). `"usage"` → your command line was wrong (typo'd flag or
+subcommand): fix it using the envelope's `hint`.
+
+`pmox guide` prints the full agent guide (safety model, envelopes, recipes,
+recovery) in one call — useful as a refresher without crawling `--help`.
+
+List commands accept `--fields vmid,name,status` to keep output small on big
+clusters (missing keys come back as `null`).
 
 ## Safety model
 
@@ -66,8 +73,8 @@ The destructive set is:
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | Error |
-| 2 | Config missing (`PROXMOX_HOST` etc. not set) |
+| 1 | Error (see the envelope's `error` field: `error` or `network`) |
+| 2 | Config missing **or** CLI usage error (envelope: `config` vs `usage`) |
 | 3 | Operation needs `--yes` |
 | 4 | Operation needs `--dangerous` |
 
@@ -80,18 +87,40 @@ envelope you can branch on:
 {"ok": false, "error": "read_only", "need": ["--dangerous"], "message": "..."}
 ```
 
-`error` is one of four fixed codes:
+`error` is one of six fixed codes:
 
 | Code | Exit | Meaning |
 |------|------|---------|
 | `read_only` | 4 | Operation needs `--dangerous` |
 | `confirm_required` | 3 | Operation needs `--yes` |
-| `config` | 2 | Credentials not configured |
+| `config` | 2 | Credentials not configured / config file invalid |
+| `usage` | 2 | Bad command line (typo'd flag or subcommand) |
+| `network` | 1 | Can't reach the Proxmox API (DNS/TLS/timeout — often transient) |
 | `error` | 1 | General error |
 
 Check `ok` first. If `ok` is false and a `need` array is present (only for
 `read_only` and `confirm_required`), it lists the flag to add (`--dangerous`
-or `--yes`). For `config` and `error` there is no `need` key.
+or `--yes`). Envelopes may carry extra machine-actionable fields:
+
+- task failures/timeouts: `upid`, `node`, and a `hint` (e.g. resume with
+  `pmox task wait <upid>`).
+- partial provisioning failures: `vmid`, `completed_steps`, `failed_step`, and
+  a `hint` saying whether a guest was already created and how to recover.
+  **A guest that was created is not cleaned up; a blind retry would create a
+  second one** — follow the hint (describe, then finish manually or delete).
+
+### Success envelope
+
+Mutations return structured results — read the fields, never parse the prose:
+
+```json
+{"ok": true, "message": "...", "op": "qemu.start", "vmid": 100, "node": "pve1",
+ "upid": "UPID:...", "hint": "..."}
+```
+
+With `--wait` the `upid` is replaced by a `task` object (final task status).
+`vm new`/`ct new`/`vm up`/`image pull --as-template` all return the created
+`vmid`; `vm up` adds `name`, `ip` (`null` when DHCP) and `ssh`.
 
 ### `--dry-run`
 
@@ -100,32 +129,56 @@ exit with zero mutations. Useful for previewing before committing. Note:
 `--dry-run` still makes **read** API calls to resolve node/VMID — cluster
 connectivity is required.
 
-### `--wait` / `--timeout`
+### `--wait` / `--timeout` / `task wait`
 
 Add `--wait` to block until the resulting task finishes and report its outcome.
-`--timeout <s>` controls how long to wait (default 600 s). Use these after
-create/start/clone operations to confirm completion before proceeding.
+`--timeout <s>` controls how long each wait may take (default 600 s).
+**Provisioning commands (`vm up`, `vm new --image`, `ct new`, `image pull`)
+always wait on their internal steps** — `--wait` matters for one-shot ops like
+start/stop/delete.
+
+If your shell times out (or `--timeout` expires) mid-operation, the Proxmox
+task keeps running server-side. Resume with:
+
+```
+pmox task wait <upid>          # node parsed from the UPID; honors --timeout
+pmox task status <upid>        # one-shot check
+pmox task log <upid>           # failure details
+```
+
+Timeout/failure envelopes include the `upid` so you can do this without
+re-parsing any text. Image downloads are cached: re-running a provisioning
+command skips an already-downloaded image. The create step is NOT idempotent —
+on a partial failure, follow the envelope's `hint` instead of blindly retrying.
 
 ## Discovery — start here
 
 ```
+pmox guide                               # the full agent guide, in one call
 pmox health                              # one-shot cluster health triage
 pmox nodes list                          # all nodes + resource usage
-pmox vm list                             # all VMs (status, resources)
+pmox vm list [--fields vmid,name,status] # all VMs (status, resources)
 pmox ct list                             # all containers
 pmox cluster resources                   # cluster-wide resource view
 pmox cluster resources --type vm         # filter: vm | node | storage | sdn | pool
 pmox vm describe <vmid>                  # consolidated: status + config + snapshots + tasks
 pmox ct describe <vmid>                  # same for containers
-pmox vm ip <vmid>                        # live IP(s): VM via guest agent, CT via interfaces
+pmox vm ip <vmid> [--wait]               # live IP(s); --wait polls until one appears
 pmox ct ip <vmid>                        # (--all adds loopback, link-local, MACs)
 pmox image list                          # VM cloud image catalog
-pmox image list --ct --node <node>       # LXC container templates on a node
+pmox image list --ct                     # LXC container templates (node auto-picked)
 ```
 
 > `vm ip` reads the live address from the QEMU guest agent, so the guest needs
 > `qemu-guest-agent` running and `agent: 1` set (cloud-init VMs from `vm new`
-> already enable `agent: 1`). `ct ip` needs no agent.
+> already enable `agent: 1`). `ct ip` needs no agent. After creating a DHCP
+> guest, `pmox vm ip <vmid> --wait` polls until the address appears.
+
+> Using `vm ...` on a container VMID (or vice versa) returns a clear error with
+> the corrective command. Unknown VMIDs error with "not found" — check
+> `pmox vm list` / `pmox ct list`. `--node` is optional almost everywhere:
+> resolved from the VMID, parsed from the UPID, or auto-picked on single-node
+> clusters (multi-node errors list the candidate names).
 
 ## Recipes
 
@@ -155,11 +208,13 @@ an SSH key (generating one if absent), and creates the VM with **DHCP** by
 default. For a known static IP, pass `--ip <cidr>,gw=<ip>`, or set a `[network]`
 pool (`cidr`/`gateway`/`pool`, outside your DHCP scope) so pmox auto-allocates a
 free address — then `pmox vm ip <vmid>` returns it immediately from cloud-init
-config, no guest agent needed.
+config, no guest agent needed. For DHCP guests, `pmox vm ip <vmid> --wait`
+polls until the agent reports an address.
 
 To get a **DHCP** VM's IP via the guest agent instead, clone a template that has
 `qemu-guest-agent` baked in: `pmox --dangerous vm up web --from-template <vmid>`
-(mutually exclusive with `--image`; the clone inherits the template's hardware).
+(mutually exclusive with `--image`; the clone inherits the template's hardware
+and pmox warns if --size/--storage are passed alongside).
 pmox can't install the agent (token-only), so build that template once yourself
 (boot a base VM, `apt install qemu-guest-agent`, convert it to a template).
 
@@ -174,7 +229,7 @@ pmox --dangerous ct new box \
 ```
 
 `--template` takes a catalog name or a vztmpl volid. Discover available
-templates with `pmox image list --ct --node <node>`.
+templates with `pmox image list --ct [--node <node>]`.
 
 ### Edit a guest
 
@@ -282,17 +337,18 @@ pmox vm config <vmid>
 pmox ct config <vmid>
 pmox vm describe <vmid>
 pmox ct describe <vmid>
-pmox vm ip <vmid> [--all] [--node <node>]
+pmox vm ip <vmid> [--all] [--wait] [--node <node>]
 pmox ct ip <vmid> [--all] [--node <node>]
 pmox vm snapshot list <vmid>
 pmox ct snapshot list <vmid>
 pmox storage list
-pmox storage content <storage> --node <node>
-pmox task list --node <node>
-pmox task status <upid> --node <node>
-pmox task log <upid> --node <node>
+pmox storage content <storage> [--node <node>]
+pmox task list [--node <node>]
+pmox task status <upid> [--node <node>]
+pmox task log <upid> [--node <node>]
+pmox task wait <upid> [--node <node>]
 pmox image list
-pmox image list --ct --node <node>
+pmox image list --ct [--node <node>]
 ```
 
 ### Change (need `--dangerous`)
@@ -317,7 +373,7 @@ pmox --dangerous ct new <name> --template <name|volid>
                                 [--password <pw>] [--wait] [--dry-run]
 pmox --dangerous image pull <name|url> --storage <storage> --node <node>
                                 [--as-template [--vmid <id>] [--name <name>]]
-                                [--ct]
+                                [--ct] [--checksum <algo>:<hexdigest>]
 pmox --dangerous vm set <vmid> -o key=value [-o key=value ...]
 pmox --dangerous ct set <vmid> -o key=value [-o key=value ...]
 pmox --dangerous vm resize <vmid> --disk <disk> --size +10G|50G
@@ -366,14 +422,16 @@ pmox --dangerous ct set <vmid> -o delete=<key> --yes
   enabled. pmox uses an API token, so it imports by volume-ID; absolute paths
   would require `root@pam`, which is not supported.
 
-- **No checksum verification.** Catalog images are downloaded over HTTPS without
-  integrity verification in v1. For security-sensitive workflows, pass a URL
-  from a trusted source or a pre-verified volid as `--image`.
+- **Checksum verification is opt-in.** Catalog images download over HTTPS
+  without integrity verification by default. For security-sensitive workflows,
+  pre-pull with `pmox --dangerous image pull <name> --checksum sha256:<hex> ...`
+  (the verified, cached image is then reused by `vm new`/`vm up`/`--as-template`),
+  or pass a trusted URL / pre-verified volid as `--image`.
 
 - **`ct new` has two storages.** `--template-storage` (default `local`) holds
-  the downloaded LXC template (vztmpl). `--storage` (default `local-lvm`) is
-  the root filesystem. Discover available templates with
-  `pmox image list --ct --node <node>`.
+  the downloaded LXC template (vztmpl). `--storage` is the root filesystem
+  (auto-detected when omitted; local-lvm preferred). Discover available templates with
+  `pmox image list --ct [--node <node>]`.
 
 - **`--dry-run` still reads.** Zero mutations are made, but pmox still calls the
   Proxmox API to resolve node/VMID lookups. Cluster connectivity is required.

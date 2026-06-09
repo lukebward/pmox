@@ -1,7 +1,7 @@
 ---
 description: Run an arbitrary pmox CLI command and interpret the output.
 argument-hint: "<pmox args>   e.g. vm status 100"
-allowed-tools: Bash(pmox:*), Bash(python:*)
+allowed-tools: Bash(pmox:*), Bash(python -m pmox:*)
 ---
 
 Run the `pmox` CLI with these arguments and explain the result:

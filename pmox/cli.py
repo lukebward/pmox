@@ -89,6 +89,10 @@ def hoist_global_flags(argv: List[str]) -> List[str]:
     by lifting known global flags ahead of the subcommand. Command-level options
     (``-o``, ``--node``, ``--size`` …) are left untouched. Anything after a bare
     ``--`` is passed through verbatim.
+
+    Known limitation: a command-level option *value* that happens to spell a
+    global flag (e.g. ``vm tag 100 --add --json``) is hoisted too; quote-proof
+    such values by placing them after ``--``.
     """
     head: List[str] = []
     rest: List[str] = []

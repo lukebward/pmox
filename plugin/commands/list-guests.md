@@ -1,7 +1,7 @@
 ---
 description: List all Proxmox VMs and containers with status and resource usage.
 argument-hint: "[running|stopped]  (optional state filter)"
-allowed-tools: Bash(pmox:*), Bash(python:*)
+allowed-tools: Bash(pmox:*), Bash(python -m pmox:*)
 ---
 
 List my Proxmox guests using the **read-only** `pmox` CLI (do NOT pass `--dangerous`).
