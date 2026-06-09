@@ -178,23 +178,39 @@ def _get_client(ctx: typer.Context) -> ProxmoxClient:
     return state.client
 
 
-def _resolve_node_or_die(client: ProxmoxClient, vmid: int) -> str:
-    node = client.resolve_node(vmid)
-    if not node:
-        err_console.print(
-            f"[red]Error:[/red] Could not locate guest {vmid} in the cluster. "
-            "Pass --node to specify it explicitly."
-        )
-        raise typer.Exit(1)
-    return node
+def _resolve_node_or_die(client: ProxmoxClient, kind: str, vmid: int) -> str:
+    """Owning node for ``vmid``, validated against ``kind``. Raises ``LookupError``
+    (which the error boundary turns into a proper envelope) when the guest is
+    missing or is the other kind."""
+    row = views.locate_guest_checked(client, kind, vmid)
+    if row is None or not row.get("node"):
+        raise views.guest_not_found(vmid)
+    return row["node"]
 
 
 def _single_node_or_die(client: ProxmoxClient) -> str:
-    """Return the only node's name, or error if the cluster has 0 or >1 nodes."""
-    nodes = client.list_nodes()
+    """Return the only node's name, or error listing the choices when there are several."""
+    nodes = sorted(n["node"] for n in client.list_nodes())
     if len(nodes) == 1:
-        return nodes[0]["node"]
-    raise ValueError("Cluster has multiple nodes; pass --node to choose where to create.")
+        return nodes[0]
+    if not nodes:
+        raise RuntimeError("The cluster reports no nodes; check connectivity and token permissions.")
+    raise ValueError(f"This cluster has multiple nodes ({', '.join(nodes)}); pass --node to choose one.")
+
+
+def _node_from_upid(upid: str) -> Optional[str]:
+    """Node name embedded in a UPID (``UPID:<node>:...``), or None."""
+    parts = upid.split(":")
+    if len(parts) > 2 and parts[0] == "UPID" and parts[1]:
+        return parts[1]
+    return None
+
+
+def _node_for_task(node: Optional[str], upid: str) -> str:
+    resolved = node or _node_from_upid(upid)
+    if not resolved:
+        raise ValueError(f"Cannot determine the node from {upid!r}; pass --node explicitly.")
+    return resolved
 
 
 _POLL_SECONDS = 2
@@ -691,7 +707,7 @@ def _make_power_command(group, kind, label, action, destructive, description):
     def _cmd(ctx: typer.Context, vmid: int = vmid_arg, node: Optional[str] = node_opt, yes: bool = yes_opt):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
-            resolved = node or _resolve_node_or_die(client, vmid)
+            resolved = node or _resolve_node_or_die(client, kind, vmid)
             _execute(
                 ctx,
                 op=f"{kind}.{action}",
@@ -727,14 +743,14 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
     def _status(ctx: typer.Context, vmid: int = vmid_arg, node: Optional[str] = node_opt):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
-            resolved = node or _resolve_node_or_die(client, vmid)
+            resolved = node or _resolve_node_or_die(client, kind, vmid)
             emit(client.guest_status(resolved, kind, vmid), json_output=ctx.obj.json, title=f"{label} {vmid} status")
 
     @group.command("config")
     def _config(ctx: typer.Context, vmid: int = vmid_arg, node: Optional[str] = node_opt):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
-            resolved = node or _resolve_node_or_die(client, vmid)
+            resolved = node or _resolve_node_or_die(client, kind, vmid)
             emit(client.guest_config(resolved, kind, vmid), json_output=ctx.obj.json, title=f"{label} {vmid} config")
 
     @group.command("describe", help=f"Consolidated view of a {label}: status, config, snapshots, recent tasks.")
@@ -784,7 +800,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
             params = parse_options(option)
             if not params:
                 raise ValueError("set needs at least one -o key=value.")
-            resolved = node or _resolve_node_or_die(client, vmid)
+            resolved = node or _resolve_node_or_die(client, kind, vmid)
             _execute(
                 ctx,
                 op=f"{kind}.set",
@@ -808,7 +824,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
     ):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
-            resolved = node or _resolve_node_or_die(client, vmid)
+            resolved = node or _resolve_node_or_die(client, kind, vmid)
             _execute(
                 ctx,
                 op=f"{kind}.resize",
@@ -828,7 +844,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
     ):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
-            resolved = node or _resolve_node_or_die(client, vmid)
+            resolved = node or _resolve_node_or_die(client, kind, vmid)
             key = "name" if kind == "qemu" else "hostname"
             _execute(
                 ctx,
@@ -851,7 +867,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
     ):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
-            resolved = node or _resolve_node_or_die(client, vmid)
+            resolved = node or _resolve_node_or_die(client, kind, vmid)
             current = client.guest_config(resolved, kind, vmid).get("tags", "")
             new_tags = merge_tags(current, add=add, remove=remove, set_=set_)
             _execute(
@@ -929,9 +945,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 target_vmid = vmid if vmid is not None else int(client.cluster_nextid())
 
                 if from_template is not None:
-                    target_node = node or client.resolve_node(from_template)
-                    if not target_node:
-                        raise LookupError(f"Could not locate template {from_template} in the cluster.")
+                    target_node = node or _resolve_node_or_die(client, "qemu", from_template)
                     sshkeys = "\n".join(Path(p).read_text().strip() for p in (ssh_key or [])) or None
                     plan = provision.build_vm_clone_plan(
                         client,
@@ -1043,9 +1057,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 profile = catalog.size_params(size)
 
                 if from_template is not None:
-                    target_node = node or client.resolve_node(from_template)
-                    if not target_node:
-                        raise LookupError(f"Could not locate template {from_template} in the cluster.")
+                    target_node = node or _resolve_node_or_die(client, "qemu", from_template)
                     resolved_import = None
                 else:
                     target_node = node or _single_node_or_die(client)
@@ -1187,7 +1199,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
     ):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
-            resolved = node or _resolve_node_or_die(client, vmid)
+            resolved = node or _resolve_node_or_die(client, kind, vmid)
             params = {}
             if name:
                 params["name"] = name
@@ -1216,7 +1228,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
     ):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
-            resolved = node or _resolve_node_or_die(client, vmid)
+            resolved = node or _resolve_node_or_die(client, kind, vmid)
             params = {}
             if online:
                 params["online"] = 1
@@ -1243,7 +1255,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
     ):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
-            resolved = node or _resolve_node_or_die(client, vmid)
+            resolved = node or _resolve_node_or_die(client, kind, vmid)
             _execute(
                 ctx,
                 op=f"{kind}.delete",
@@ -1264,7 +1276,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
     def _snap_list(ctx: typer.Context, vmid: int = vmid_arg, node: Optional[str] = node_opt):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
-            resolved = node or _resolve_node_or_die(client, vmid)
+            resolved = node or _resolve_node_or_die(client, kind, vmid)
             emit(
                 client.list_snapshots(resolved, kind, vmid),
                 columns=SNAPSHOT_COLUMNS,
@@ -1283,7 +1295,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
     ):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
-            resolved = node or _resolve_node_or_die(client, vmid)
+            resolved = node or _resolve_node_or_die(client, kind, vmid)
             params = {}
             if description:
                 params["description"] = description
@@ -1309,7 +1321,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
     ):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
-            resolved = node or _resolve_node_or_die(client, vmid)
+            resolved = node or _resolve_node_or_die(client, kind, vmid)
             _execute(
                 ctx,
                 op=f"{kind}.snapshot.delete",
@@ -1333,7 +1345,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
     ):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
-            resolved = node or _resolve_node_or_die(client, vmid)
+            resolved = node or _resolve_node_or_die(client, kind, vmid)
             _execute(
                 ctx,
                 op=f"{kind}.snapshot.rollback",
@@ -1373,12 +1385,13 @@ def storage_list(ctx: typer.Context, node: Optional[str] = node_opt):
 def storage_content(
     ctx: typer.Context,
     storage: str = typer.Argument(..., help="Storage id."),
-    node: str = typer.Option(..., "--node", "-n", help="Node name."),
+    node: Optional[str] = typer.Option(None, "--node", "-n", help="Node name (auto-picked on a single-node cluster)."),
 ):
     with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
+        resolved = node or _single_node_or_die(client)
         emit(
-            client.storage_content(node, storage),
+            client.storage_content(resolved, storage),
             columns=CONTENT_COLUMNS,
             json_output=ctx.obj.json,
             title=f"{storage} content",
@@ -1423,39 +1436,63 @@ task_app = typer.Typer(help="Inspect node tasks.", no_args_is_help=True)
 @task_app.command("list")
 def task_list(
     ctx: typer.Context,
-    node: str = typer.Option(..., "--node", "-n", help="Node name."),
+    node: Optional[str] = typer.Option(None, "--node", "-n", help="Node name (auto-picked on a single-node cluster)."),
     limit: int = typer.Option(50, "--limit", help="Max tasks to show."),
 ):
     with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
-        emit(client.list_tasks(node, limit=limit), columns=TASK_COLUMNS, json_output=ctx.obj.json, title=f"{node} tasks")
+        resolved = node or _single_node_or_die(client)
+        emit(client.list_tasks(resolved, limit=limit), columns=TASK_COLUMNS, json_output=ctx.obj.json, title=f"{resolved} tasks")
 
 
 @task_app.command("status")
 def task_status(
     ctx: typer.Context,
     upid: str = typer.Argument(..., help="Task UPID."),
-    node: str = typer.Option(..., "--node", "-n", help="Node name."),
+    node: Optional[str] = typer.Option(None, "--node", "-n", help="Node name (default: parsed from the UPID)."),
 ):
     with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
-        emit(client.task_status(node, upid), json_output=ctx.obj.json, title="Task status")
+        resolved = _node_for_task(node, upid)
+        emit(client.task_status(resolved, upid), json_output=ctx.obj.json, title="Task status")
 
 
 @task_app.command("log")
 def task_log(
     ctx: typer.Context,
     upid: str = typer.Argument(..., help="Task UPID."),
-    node: str = typer.Option(..., "--node", "-n", help="Node name."),
+    node: Optional[str] = typer.Option(None, "--node", "-n", help="Node name (default: parsed from the UPID)."),
 ):
     with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
-        data = client.task_log(node, upid)
+        resolved = _node_for_task(node, upid)
+        data = client.task_log(resolved, upid)
         if ctx.obj.json:
             emit(data, json_output=True)
             return
         for line in data:
             console.print(line.get("t", "") if isinstance(line, dict) else str(line))
+
+
+@task_app.command("wait")
+def task_wait(
+    ctx: typer.Context,
+    upid: str = typer.Argument(..., help="Task UPID to wait for."),
+    node: Optional[str] = typer.Option(None, "--node", "-n", help="Node name (default: parsed from the UPID)."),
+):
+    """Poll a task until it finishes (read-only; honors --timeout). Exit 1 if the task failed.
+
+    Useful to resume waiting after a --wait timeout or an interrupted provisioning run.
+    """
+    with error_boundary(ctx.obj.json):
+        if not upid.startswith("UPID:"):
+            raise ValueError(f"{upid!r} is not a task UPID (expected 'UPID:<node>:...').")
+        resolved = _node_for_task(node, upid)
+        status = _maybe_wait(ctx, resolved, upid)
+        _ok(
+            ctx, f"Task finished: {status.get('exitstatus', 'OK')}",
+            op="task.wait", node=resolved, upid=upid, task=status,
+        )
 
 
 # ---- image catalog / pull ----
@@ -1466,15 +1503,14 @@ image_app = typer.Typer(help="VM cloud images: list the catalog and pull them to
 def image_list(
     ctx: typer.Context,
     ct: bool = typer.Option(False, "--ct", help="List LXC container templates (live, from the node) instead of the VM catalog."),
-    node: Optional[str] = typer.Option(None, "--node", "-n", help="Node (required with --ct)."),
+    node: Optional[str] = typer.Option(None, "--node", "-n", help="Node for --ct (auto-picked on a single-node cluster)."),
 ):
     """List VM cloud images (catalog) or, with --ct, container templates from a node."""
     with error_boundary(ctx.obj.json):
         if ct:
-            if not node:
-                raise ValueError("--ct requires --node.")
             client = _get_client(ctx)
-            emit(client.list_appliances(node), json_output=ctx.obj.json, title="Container templates")
+            resolved = node or _single_node_or_die(client)
+            emit(client.list_appliances(resolved), json_output=ctx.obj.json, title="Container templates")
             return
         rows = [{"name": name, "url": e["url"], "filename": e["filename"]} for name, e in catalog.IMAGE_CATALOG.items()]
         emit(rows, json_output=ctx.obj.json, title="Image catalog")

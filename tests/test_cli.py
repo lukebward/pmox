@@ -86,11 +86,11 @@ def test_ct_list(fake_client, creds):
 
 
 def test_vm_status_autoresolves_node(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     fake_client.guest_status.return_value = {"status": "running"}
     r = inv(["vm", "status", "100"], creds)
     assert r.exit_code == 0, r.output
-    fake_client.resolve_node.assert_called_once_with(100)
+    fake_client.locate_guest.assert_called_once_with(100)
     fake_client.guest_status.assert_called_once_with("pve1", "qemu", 100)
 
 
@@ -98,12 +98,12 @@ def test_vm_status_with_explicit_node_skips_resolve(fake_client, creds):
     fake_client.guest_status.return_value = {"status": "running"}
     r = inv(["vm", "status", "100", "--node", "pve2"], creds)
     assert r.exit_code == 0, r.output
-    fake_client.resolve_node.assert_not_called()
+    fake_client.locate_guest.assert_not_called()
     fake_client.guest_status.assert_called_once_with("pve2", "qemu", 100)
 
 
 def test_vm_config(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     fake_client.guest_config.return_value = {"cores": 2}
     r = inv(["vm", "config", "100"], creds)
     assert r.exit_code == 0, r.output
@@ -111,7 +111,7 @@ def test_vm_config(fake_client, creds):
 
 
 def test_resolve_failure_exit1(fake_client, creds):
-    fake_client.resolve_node.return_value = None
+    fake_client.locate_guest.return_value = None
     r = inv(["vm", "status", "999"], creds)
     assert r.exit_code == 1, r.output
 
@@ -198,21 +198,21 @@ def test_task_log_json(fake_client, creds):
 
 
 def test_start_blocked_in_readonly(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["vm", "start", "100"], creds)
     assert r.exit_code == 4, r.output
     fake_client.guest_power.assert_not_called()
 
 
 def test_start_allowed_in_dangerous(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["--dangerous", "vm", "start", "100"], creds)
     assert r.exit_code == 0, r.output
     fake_client.guest_power.assert_called_once_with("pve1", "qemu", 100, "start")
 
 
 def test_pmox_dangerous_env_enables_writes(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["vm", "start", "100"], dict(creds, PMOX_DANGEROUS="1"))
     assert r.exit_code == 0, r.output
     fake_client.guest_power.assert_called_once_with("pve1", "qemu", 100, "start")
@@ -220,7 +220,7 @@ def test_pmox_dangerous_env_enables_writes(fake_client, creds):
 
 @pytest.mark.parametrize("action", ["shutdown", "reboot", "suspend", "resume"])
 def test_nondestructive_power(fake_client, creds, action):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["--dangerous", "vm", action, "100"], creds)
     assert r.exit_code == 0, r.output
     fake_client.guest_power.assert_called_once_with("pve1", "qemu", 100, action)
@@ -228,7 +228,7 @@ def test_nondestructive_power(fake_client, creds, action):
 
 @pytest.mark.parametrize("action", ["stop", "reset"])
 def test_destructive_power_needs_yes(fake_client, creds, action):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["--dangerous", "vm", action, "100"], creds)
     assert r.exit_code == 3, r.output
     fake_client.guest_power.assert_not_called()
@@ -260,7 +260,7 @@ def test_create_bad_option_exit1(fake_client, creds):
 
 
 def test_clone(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(
         ["--dangerous", "vm", "clone", "100", "--newid", "105", "--full", "--name", "copy", "--target", "pve2"],
         creds,
@@ -270,7 +270,7 @@ def test_clone(fake_client, creds):
 
 
 def test_migrate_needs_yes(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["--dangerous", "vm", "migrate", "100", "--target", "pve2"], creds)
     assert r.exit_code == 3, r.output
 
@@ -280,21 +280,21 @@ def test_migrate_needs_yes(fake_client, creds):
 
 
 def test_delete_blocked_in_readonly_before_confirm(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["vm", "delete", "100", "--yes"], creds)
     assert r.exit_code == 4, r.output  # write gate fires before the confirm gate
     fake_client.delete_guest.assert_not_called()
 
 
 def test_delete_needs_yes(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["--dangerous", "vm", "delete", "100"], creds)
     assert r.exit_code == 3, r.output
     fake_client.delete_guest.assert_not_called()
 
 
 def test_delete_ok_with_purge(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     fake_client.delete_guest.return_value = "UPID"
     r = inv(["--dangerous", "vm", "delete", "100", "--yes", "--purge"], creds)
     assert r.exit_code == 0, r.output
@@ -302,7 +302,7 @@ def test_delete_ok_with_purge(fake_client, creds):
 
 
 def test_ok_json_envelope(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     fake_client.guest_power.return_value = "UPID:task"
     r = inv(["--json", "--dangerous", "vm", "start", "100"], creds)
     assert r.exit_code == 0, r.output
@@ -319,7 +319,7 @@ def test_ok_json_envelope(fake_client, creds):
 
 
 def test_snapshot_list(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     fake_client.list_snapshots.return_value = [{"name": "pre"}]
     r = inv(["vm", "snapshot", "list", "100"], creds)
     assert r.exit_code == 0, r.output
@@ -327,21 +327,21 @@ def test_snapshot_list(fake_client, creds):
 
 
 def test_snapshot_create_needs_dangerous(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["vm", "snapshot", "create", "100", "snap1"], creds)
     assert r.exit_code == 4, r.output
     fake_client.create_snapshot.assert_not_called()
 
 
 def test_snapshot_create(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["--dangerous", "vm", "snapshot", "create", "100", "snap1", "-d", "desc", "--vmstate"], creds)
     assert r.exit_code == 0, r.output
     fake_client.create_snapshot.assert_called_once_with("pve1", "qemu", 100, "snap1", description="desc", vmstate=1)
 
 
 def test_snapshot_delete_needs_yes(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["--dangerous", "vm", "snapshot", "delete", "100", "snap1"], creds)
     assert r.exit_code == 3, r.output
 
@@ -351,7 +351,7 @@ def test_snapshot_delete_needs_yes(fake_client, creds):
 
 
 def test_snapshot_rollback(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["--dangerous", "vm", "snapshot", "rollback", "100", "snap1", "--yes"], creds)
     assert r.exit_code == 0, r.output
     fake_client.rollback_snapshot.assert_called_once_with("pve1", "qemu", 100, "snap1")
@@ -538,7 +538,7 @@ def test_no_json_overrides_capture_default(fake_client, creds):
 
 def test_ok_human_envelope(fake_client, creds):
     """--no-json yields the human success line, not the JSON envelope."""
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     fake_client.guest_power.return_value = "UPID:task"
     r = inv(["--no-json", "--dangerous", "vm", "start", "100"], creds)
     assert r.exit_code == 0, r.output
@@ -607,7 +607,7 @@ def test_maybe_wait_raises_on_failed_task(monkeypatch):
 
 
 def test_error_json_envelope_readonly(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["--json", "vm", "start", "100"], creds)
     assert r.exit_code == 4, r.output
     payload = json.loads(r.output)
@@ -620,7 +620,7 @@ def test_error_json_envelope_readonly(fake_client, creds):
 
 
 def test_error_json_envelope_confirm(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["--json", "--dangerous", "vm", "delete", "100"], creds)
     assert r.exit_code == 3, r.output
     payload = json.loads(r.output)
@@ -629,12 +629,21 @@ def test_error_json_envelope_confirm(fake_client, creds):
 
 
 def test_error_human_readonly_still_rich(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["--no-json", "vm", "start", "100"], creds)
     assert r.exit_code == 4, r.output
     assert "Read-only" in plain(r.output)
     with pytest.raises(json.JSONDecodeError):
         json.loads(r.output)
+
+
+def test_error_boundary_passes_typer_exit_through(capsys):
+    import typer
+
+    with pytest.raises(typer.Exit):
+        with cli.error_boundary(json_output=True):
+            raise typer.Exit(7)
+    assert capsys.readouterr().out == ""  # an already-emitted exit is not re-wrapped
 
 
 def test_dry_run_emitter_shape(capsys):
@@ -726,7 +735,7 @@ def test_execute_waits_when_requested(monkeypatch):
 
 
 def test_power_dry_run_skips_call(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["--dry-run", "vm", "start", "100"], creds)
     assert r.exit_code == 0, r.output
     payload = json.loads(r.output)
@@ -735,7 +744,7 @@ def test_power_dry_run_skips_call(fake_client, creds):
 
 
 def test_power_wait_reports_task(fake_client, creds, monkeypatch):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     fake_client.guest_power.return_value = "UPID:pve1:start"
     fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
     monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
@@ -750,7 +759,7 @@ def test_power_wait_reports_task(fake_client, creds, monkeypatch):
 
 
 def test_delete_dry_run_skips_call(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["--dry-run", "vm", "delete", "100"], creds)
     assert r.exit_code == 0, r.output
     assert json.loads(r.output)["op"] == "qemu.delete"
@@ -778,27 +787,27 @@ def test_parse_options_rejects_no_equals():
 
 
 def test_set_updates_config(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["--dangerous", "vm", "set", "100", "-o", "cores=4", "-o", "memory=4096"], creds)
     assert r.exit_code == 0, r.output
     fake_client.update_config.assert_called_once_with("pve1", "qemu", 100, cores="4", memory="4096")
 
 
 def test_set_needs_dangerous(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["vm", "set", "100", "-o", "cores=4"], creds)
     assert r.exit_code == 4, r.output
     fake_client.update_config.assert_not_called()
 
 
 def test_set_requires_at_least_one_option(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["--dangerous", "vm", "set", "100"], creds)
     assert r.exit_code == 1, r.output
 
 
 def test_set_delete_needs_yes(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["--dangerous", "vm", "set", "100", "-o", "delete=net1"], creds)
     assert r.exit_code == 3, r.output
     fake_client.update_config.assert_not_called()
@@ -812,14 +821,14 @@ def test_set_delete_needs_yes(fake_client, creds):
 
 
 def test_resize_grows_disk(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["--dangerous", "vm", "resize", "100", "--disk", "scsi0", "--size", "+10G"], creds)
     assert r.exit_code == 0, r.output
     fake_client.resize_disk.assert_called_once_with("pve1", "qemu", 100, "scsi0", "+10G")
 
 
 def test_resize_needs_dangerous(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["vm", "resize", "100", "--disk", "scsi0", "--size", "+10G"], creds)
     assert r.exit_code == 4, r.output
     fake_client.resize_disk.assert_not_called()
@@ -829,14 +838,14 @@ def test_resize_needs_dangerous(fake_client, creds):
 
 
 def test_rename_vm_sets_name(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["--dangerous", "vm", "rename", "100", "web01"], creds)
     assert r.exit_code == 0, r.output
     fake_client.update_config.assert_called_once_with("pve1", "qemu", 100, name="web01")
 
 
 def test_rename_ct_sets_hostname(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "lxc"}
     r = inv(["--dangerous", "ct", "rename", "200", "box01"], creds)
     assert r.exit_code == 0, r.output
     fake_client.update_config.assert_called_once_with("pve1", "lxc", 200, hostname="box01")
@@ -862,7 +871,7 @@ def test_merge_tags_empty():
 
 
 def test_tag_reads_then_writes(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     fake_client.guest_config.return_value = {"tags": "prod"}
     r = inv(["--dangerous", "vm", "tag", "100", "--add", "k3s"], creds)
     assert r.exit_code == 0, r.output
@@ -873,7 +882,7 @@ def test_tag_reads_then_writes(fake_client, creds):
 
 
 def test_describe_json(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     fake_client.guest_status.return_value = {"status": "running"}
     fake_client.guest_config.return_value = {"cores": 2}
     fake_client.list_snapshots.return_value = []
@@ -885,7 +894,7 @@ def test_describe_json(fake_client, creds):
 
 
 def test_describe_human(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     fake_client.guest_status.return_value = {"status": "running"}
     fake_client.guest_config.return_value = {"cores": 2}
     fake_client.list_snapshots.return_value = [{"name": "pre"}]
@@ -896,7 +905,7 @@ def test_describe_human(fake_client, creds):
 
 
 def test_describe_ct(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "lxc"}
     fake_client.guest_status.return_value = {"status": "running"}
     fake_client.guest_config.return_value = {}
     fake_client.list_snapshots.return_value = []
@@ -907,14 +916,14 @@ def test_describe_ct(fake_client, creds):
 
 
 def _ip_row(name="web-01"):
-    row = {"vmid": 150, "node": "lukeserver"}
+    row = {"vmid": 150, "node": "lukeserver", "type": "qemu"}
     if name is not None:
         row["name"] = name
-    return [row]
+    return row
 
 
 def test_vm_ip_filtered(fake_client, creds):
-    fake_client.cluster_resources.return_value = _ip_row()
+    fake_client.locate_guest.return_value = _ip_row()
     fake_client.agent_network_interfaces.return_value = {"result": [
         {"name": "lo", "hardware-address": "0", "ip-addresses": [
             {"ip-address-type": "ipv4", "ip-address": "127.0.0.1", "prefix": 8}]},
@@ -932,7 +941,7 @@ def test_vm_ip_filtered(fake_client, creds):
 
 
 def test_vm_ip_all_shows_loopback_and_mac(fake_client, creds):
-    fake_client.cluster_resources.return_value = _ip_row(name=None)  # exercises name-absent header
+    fake_client.locate_guest.return_value = _ip_row(name=None)  # exercises name-absent header
     fake_client.agent_network_interfaces.return_value = {"result": [
         {"name": "lo", "ip-addresses": [  # no hardware-address -> MAC '-'
             {"ip-address-type": "ipv4", "ip-address": "127.0.0.1", "prefix": 8}]},
@@ -947,7 +956,7 @@ def test_vm_ip_all_shows_loopback_and_mac(fake_client, creds):
 
 
 def test_vm_ip_json_full_data(fake_client, creds):
-    fake_client.cluster_resources.return_value = _ip_row()
+    fake_client.locate_guest.return_value = _ip_row()
     fake_client.agent_network_interfaces.return_value = {"result": [
         {"name": "eth0", "hardware-address": "bc:24:11:aa:bb:cc", "ip-addresses": [
             {"ip-address-type": "ipv4", "ip-address": "192.168.1.50", "prefix": 24}]},
@@ -961,7 +970,7 @@ def test_vm_ip_json_full_data(fake_client, creds):
 
 
 def test_ct_ip_uses_interfaces_endpoint(fake_client, creds):
-    fake_client.cluster_resources.return_value = [{"vmid": 200, "node": "pve1", "name": "ct"}]
+    fake_client.locate_guest.return_value = {"vmid": 200, "node": "pve1", "name": "ct", "type": "lxc"}
     fake_client.lxc_interfaces.return_value = [{"name": "eth0", "hwaddr": "aa:bb", "inet": "10.0.0.5/24"}]
     r = inv(["--json", "ct", "ip", "200"], creds)
     assert r.exit_code == 0, r.output
@@ -971,7 +980,7 @@ def test_ct_ip_uses_interfaces_endpoint(fake_client, creds):
 
 
 def test_vm_ip_agent_down_error_envelope(fake_client, creds):
-    fake_client.cluster_resources.return_value = _ip_row()
+    fake_client.locate_guest.return_value = _ip_row()
     fake_client.agent_network_interfaces.side_effect = RuntimeError("guest agent is not running")
     r = inv(["--json", "vm", "ip", "150"], creds)
     assert r.exit_code == 1, r.output
@@ -981,12 +990,11 @@ def test_vm_ip_agent_down_error_envelope(fake_client, creds):
 
 
 def test_describe_includes_network(fake_client, creds):
-    fake_client.resolve_node.return_value = "lukeserver"
+    fake_client.locate_guest.return_value = _ip_row()
     fake_client.guest_status.return_value = {"status": "running"}
     fake_client.guest_config.return_value = {"cores": 2}
     fake_client.list_snapshots.return_value = []
     fake_client.list_tasks.return_value = []
-    fake_client.cluster_resources.return_value = _ip_row()
     fake_client.agent_network_interfaces.return_value = {"result": [
         {"name": "eth0", "hardware-address": "x", "ip-addresses": [
             {"ip-address-type": "ipv4", "ip-address": "192.168.1.50", "prefix": 24}]},
@@ -998,12 +1006,11 @@ def test_describe_includes_network(fake_client, creds):
 
 
 def test_describe_human_network_unavailable(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     fake_client.guest_status.return_value = {"status": "running"}
     fake_client.guest_config.return_value = {}
     fake_client.list_snapshots.return_value = []
     fake_client.list_tasks.return_value = []
-    fake_client.cluster_resources.return_value = [{"vmid": 100, "node": "pve1", "name": "x"}]
     fake_client.agent_network_interfaces.side_effect = RuntimeError("agent down")
     r = inv(["--no-json", "vm", "describe", "100"], creds)
     assert r.exit_code == 0, r.output
@@ -1320,7 +1327,7 @@ def test_vm_new_from_template_clones_and_sets_ci(fake_client, creds, tmp_path, m
     monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
     key = tmp_path / "id.pub"
     key.write_text("ssh-ed25519 AAAA user@host")
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     fake_client.clone_guest.return_value = "UPID:clone"
     fake_client.guest_power.return_value = "UPID:start"
     fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
@@ -1334,7 +1341,7 @@ def test_vm_new_from_template_clones_and_sets_ci(fake_client, creds, tmp_path, m
 
 
 def test_vm_new_from_template_dry_run(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["--dry-run", "vm", "new", "web", "--from-template", "9000", "--vmid", "120"], creds)
     assert r.exit_code == 0, r.output
     payload = json.loads(r.output)
@@ -1349,14 +1356,14 @@ def test_vm_new_image_and_template_mutually_exclusive(fake_client, creds):
 
 
 def test_vm_new_from_template_needs_dangerous(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["vm", "new", "web", "--from-template", "9000", "--vmid", "120"], creds)
     assert r.exit_code == 4, r.output
     fake_client.clone_guest.assert_not_called()
 
 
 def test_vm_new_from_template_resolve_fails(fake_client, creds):
-    fake_client.resolve_node.return_value = None
+    fake_client.locate_guest.return_value = None
     r = inv(["--dangerous", "vm", "new", "web", "--from-template", "9000", "--vmid", "120"], creds)
     assert r.exit_code == 1, r.output
     fake_client.clone_guest.assert_not_called()
@@ -1410,9 +1417,20 @@ def test_image_list_ct(fake_client, creds):
     fake_client.list_appliances.assert_called_once_with("pve1")
 
 
-def test_image_list_ct_requires_node(fake_client, creds):
+def test_image_list_ct_auto_node_single(fake_client, creds):
+    fake_client.list_nodes.return_value = [{"node": "only"}]
+    fake_client.list_appliances.return_value = []
+    r = inv(["--json", "image", "list", "--ct"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.list_appliances.assert_called_once_with("only")
+
+
+def test_image_list_ct_multi_node_errors_with_candidates(fake_client, creds):
+    fake_client.list_nodes.return_value = [{"node": "b"}, {"node": "a"}]
     r = inv(["--json", "image", "list", "--ct"], creds)
     assert r.exit_code == 1, r.output
+    msg = json.loads(r.output)["message"]
+    assert "a, b" in msg and "--node" in msg
     fake_client.list_appliances.assert_not_called()
 
 
@@ -1568,7 +1586,7 @@ def test_vm_up_from_template_clones(fake_client, creds, tmp_path, monkeypatch):
     monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
     key = tmp_path / "id_ed25519.pub"
     key.write_text("ssh-ed25519 AAAA u@h")
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     fake_client.cluster_nextid.return_value = "150"
     fake_client.cluster_resources.return_value = []  # pool free -> .200
     fake_client.clone_guest.return_value = "UPID:clone"
@@ -1579,7 +1597,7 @@ def test_vm_up_from_template_clones(fake_client, creds, tmp_path, monkeypatch):
              "--ssh-key", str(key), "--ciuser", "ubuntu"], _net_creds(creds))
     assert r.exit_code == 0, r.output
     fake_client.clone_guest.assert_called_once()
-    fake_client.resolve_node.assert_called_with(9000)  # node from the template
+    fake_client.locate_guest.assert_called_with(9000)  # node from the template
     cfg = fake_client.update_config.call_args.kwargs
     assert cfg["ipconfig0"] == "ip=192.168.0.200/24,gw=192.168.0.1"
     assert "sshkeys" in cfg
@@ -1590,7 +1608,7 @@ def test_vm_up_from_template_dhcp(fake_client, creds, tmp_path, monkeypatch):
     monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
     key = tmp_path / "id_ed25519.pub"
     key.write_text("ssh-ed25519 AAAA u@h")
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     fake_client.cluster_nextid.return_value = "150"
     fake_client.clone_guest.return_value = "UPID:clone"
     fake_client.update_config.return_value = "UPID:cfg"
@@ -1607,7 +1625,7 @@ def test_vm_up_from_template_unresolvable_errors(fake_client, creds, tmp_path):
     key = tmp_path / "id_ed25519.pub"
     key.write_text("ssh-ed25519 AAAA u@h")
     fake_client.cluster_nextid.return_value = "150"
-    fake_client.resolve_node.return_value = None  # template not found
+    fake_client.locate_guest.return_value = None  # template not found
     r = inv(["--dangerous", "vm", "up", "web", "--from-template", "9000", "--ssh-key", str(key)], creds)
     assert r.exit_code == 1, r.output
     fake_client.clone_guest.assert_not_called()
@@ -1742,7 +1760,7 @@ def test_vm_new_image_envelope_has_vmid(fake_client, creds, tmp_path, monkeypatc
 
 def test_vm_new_from_template_envelope_has_vmid(fake_client, creds, monkeypatch):
     monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     fake_client.clone_guest.return_value = "UPID:clone"
     fake_client.guest_power.return_value = "UPID:start"
     fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
@@ -1838,7 +1856,7 @@ def test_vm_up_json_envelope_dhcp_hint(fake_client, creds, tmp_path, monkeypatch
 
 
 def test_clone_envelope_reports_new_vmid(fake_client, creds):
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     fake_client.clone_guest.return_value = "UPID:clone"
     r = inv(["--json", "--dangerous", "vm", "clone", "100", "--newid", "105"], creds)
     assert r.exit_code == 0, r.output
@@ -1851,7 +1869,7 @@ def test_clone_envelope_reports_new_vmid(fake_client, creds):
 
 def test_wait_failed_task_envelope_has_upid_node_hint(fake_client, creds, monkeypatch):
     monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     fake_client.guest_power.return_value = "UPID:pve1:dead"
     fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "got signal 11"}
     r = inv(["--json", "--dangerous", "--wait", "vm", "start", "100"], creds)
@@ -1865,7 +1883,7 @@ def test_wait_failed_task_envelope_has_upid_node_hint(fake_client, creds, monkey
 
 def test_error_human_mode_prints_hint(fake_client, creds, monkeypatch):
     monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
-    fake_client.resolve_node.return_value = "pve1"
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     fake_client.guest_power.return_value = "UPID:pve1:dead"
     fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "boom"}
     r = inv(["--no-json", "--dangerous", "--wait", "vm", "start", "100"], creds)
@@ -2091,3 +2109,167 @@ def test_json_mode_from_argv_flag_beats_env(monkeypatch):
 def test_json_mode_from_argv_ignores_after_double_dash(monkeypatch):
     monkeypatch.setenv("PMOX_JSON", "0")
     assert cli._json_mode_from_argv(["vm", "list", "--", "--json"]) is False
+
+
+# ------------------------------------- guest resolution & kind mismatch --
+
+
+def test_vm_status_unknown_guest_emits_envelope(fake_client, creds):
+    fake_client.locate_guest.return_value = None
+    r = inv(["--json", "vm", "status", "999"], creds)
+    assert r.exit_code == 1, r.output
+    payload = json.loads(r.output)
+    assert payload["ok"] is False
+    assert "not found" in payload["message"]
+    assert "vm list" in payload["message"]
+
+
+def test_vm_command_on_container_suggests_ct(fake_client, creds):
+    fake_client.locate_guest.return_value = {"vmid": 100, "node": "pve1", "type": "lxc", "name": "wireguard"}
+    r = inv(["--json", "vm", "status", "100"], creds)
+    assert r.exit_code == 1, r.output
+    payload = json.loads(r.output)
+    assert "pmox ct" in payload["message"]
+    assert "wireguard" in payload["message"]
+    fake_client.guest_status.assert_not_called()
+
+
+def test_ct_command_on_vm_suggests_vm(fake_client, creds):
+    fake_client.locate_guest.return_value = {"vmid": 101, "node": "pve1", "type": "qemu"}
+    r = inv(["--json", "ct", "status", "101"], creds)
+    assert r.exit_code == 1, r.output
+    assert "pmox vm" in json.loads(r.output)["message"]
+
+
+def test_describe_on_wrong_kind_suggests_other(fake_client, creds):
+    fake_client.locate_guest.return_value = {"vmid": 100, "node": "pve1", "type": "lxc"}
+    r = inv(["--json", "vm", "describe", "100"], creds)
+    assert r.exit_code == 1, r.output
+    assert "pmox ct" in json.loads(r.output)["message"]
+
+
+def test_vm_ip_on_wrong_kind_suggests_other(fake_client, creds):
+    fake_client.locate_guest.return_value = {"vmid": 100, "node": "pve1", "type": "lxc"}
+    r = inv(["--json", "vm", "ip", "100"], creds)
+    assert r.exit_code == 1, r.output
+    assert "pmox ct" in json.loads(r.output)["message"]
+
+
+def test_vm_new_from_template_on_ct_errors(fake_client, creds):
+    fake_client.locate_guest.return_value = {"vmid": 9000, "node": "pve1", "type": "lxc"}
+    r = inv(["--json", "--dangerous", "vm", "new", "web", "--from-template", "9000", "--vmid", "120"], creds)
+    assert r.exit_code == 1, r.output
+    assert "pmox ct" in json.loads(r.output)["message"]
+    fake_client.clone_guest.assert_not_called()
+
+
+def test_single_node_error_lists_candidates(fake_client, creds):
+    fake_client.list_nodes.return_value = [{"node": "b"}, {"node": "a"}]
+    r = inv(["--json", "--dangerous", "vm", "new", "--vmid", "150"], creds)
+    assert r.exit_code == 1, r.output
+    msg = json.loads(r.output)["message"]
+    assert "a, b" in msg and "--node" in msg
+
+
+def test_single_node_no_nodes_errors(fake_client, creds):
+    fake_client.list_nodes.return_value = []
+    r = inv(["--json", "--dangerous", "vm", "new", "--vmid", "150"], creds)
+    assert r.exit_code == 1, r.output
+    assert "no nodes" in json.loads(r.output)["message"]
+
+
+# ------------------------------------------------- node consistency & task wait --
+
+
+def test_task_list_auto_node_single(fake_client, creds):
+    fake_client.list_nodes.return_value = [{"node": "only"}]
+    fake_client.list_tasks.return_value = []
+    r = inv(["task", "list"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.list_tasks.assert_called_once_with("only", limit=50)
+
+
+def test_task_list_multi_node_requires_choice(fake_client, creds):
+    fake_client.list_nodes.return_value = [{"node": "a"}, {"node": "b"}]
+    r = inv(["--json", "task", "list"], creds)
+    assert r.exit_code == 1, r.output
+    assert "--node" in json.loads(r.output)["message"]
+
+
+def test_storage_content_auto_node(fake_client, creds):
+    fake_client.list_nodes.return_value = [{"node": "only"}]
+    fake_client.storage_content.return_value = []
+    r = inv(["storage", "content", "local"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.storage_content.assert_called_once_with("only", "local")
+
+
+_FULL_UPID = "UPID:pve9:000ABC12:00DEF345:65A1B2C3:qmstart:100:root@pam!pmox:"
+
+
+def test_task_status_node_from_upid(fake_client, creds):
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["task", "status", _FULL_UPID], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.task_status.assert_called_once_with("pve9", _FULL_UPID)
+
+
+def test_task_log_node_from_upid(fake_client, creds):
+    fake_client.task_log.return_value = []
+    r = inv(["task", "log", _FULL_UPID], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.task_log.assert_called_once_with("pve9", _FULL_UPID)
+
+
+def test_task_status_bad_upid_without_node_errors(fake_client, creds):
+    r = inv(["--json", "task", "status", "nonsense"], creds)
+    assert r.exit_code == 1, r.output
+    assert "--node" in json.loads(r.output)["message"]
+    fake_client.task_status.assert_not_called()
+
+
+def test_node_from_upid_parsing():
+    assert cli._node_from_upid(_FULL_UPID) == "pve9"
+    assert cli._node_from_upid("nonsense") is None
+    assert cli._node_from_upid("UPID::0001:x") is None  # empty node field
+    assert cli._node_from_upid("UPID:pve1") is None     # too short
+
+
+def test_task_wait_polls_to_completion(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.task_status.side_effect = [
+        {"status": "running"},
+        {"status": "stopped", "exitstatus": "OK"},
+    ]
+    r = inv(["--json", "task", "wait", _FULL_UPID], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["ok"] is True and payload["op"] == "task.wait"
+    assert payload["node"] == "pve9"
+    assert payload["upid"] == _FULL_UPID
+    assert payload["task"]["exitstatus"] == "OK"
+
+
+def test_task_wait_failed_task_exit1_with_upid(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "boom"}
+    r = inv(["--json", "task", "wait", _FULL_UPID], creds)
+    assert r.exit_code == 1, r.output
+    payload = json.loads(r.output)
+    assert payload["upid"] == _FULL_UPID
+    assert "task log" in payload["hint"]
+
+
+def test_task_wait_explicit_node_override(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["task", "wait", _FULL_UPID, "--node", "elsewhere"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.task_status.assert_called_with("elsewhere", _FULL_UPID)
+
+
+def test_task_wait_rejects_non_upid(fake_client, creds):
+    r = inv(["--json", "task", "wait", "nonsense"], creds)
+    assert r.exit_code == 1, r.output
+    assert "not a task UPID" in json.loads(r.output)["message"]
+    fake_client.task_status.assert_not_called()
