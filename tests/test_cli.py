@@ -308,7 +308,11 @@ def test_ok_json_envelope(fake_client, creds):
     assert r.exit_code == 0, r.output
     payload = json.loads(r.output)
     assert payload["ok"] is True
-    assert payload["result"] == "UPID:task"
+    assert payload["op"] == "qemu.start"
+    assert payload["vmid"] == 100
+    assert payload["node"] == "pve1"
+    assert payload["upid"] == "UPID:task"
+    assert "result" not in payload  # typed fields replace the untyped result
 
 
 # --------------------------------------------------------------- snapshots ---
@@ -423,11 +427,20 @@ def test_hoist_multiple_interleaved_flags():
 
 def test_main_invokes_app(monkeypatch):
     captured = {}
-    monkeypatch.setattr(cli, "app", lambda **kw: captured.update(kw) or captured.setdefault("ran", True))
+
+    def fake_app(**kw):
+        captured.update(kw)
+        captured["ran"] = True
+        return None
+
+    monkeypatch.setattr(cli, "app", fake_app)
     monkeypatch.setattr(cli.sys, "argv", ["pmox", "vm", "list", "--json"])
-    cli.main()
+    with pytest.raises(SystemExit) as ei:
+        cli.main()
+    assert ei.value.code == 0
     assert captured["ran"] is True
     assert captured["args"] == ["--json", "vm", "list"]
+    assert captured["standalone_mode"] is False
 
 
 def test_callback_config_error_exit2(monkeypatch):
@@ -570,8 +583,12 @@ def test_maybe_wait_times_out(monkeypatch):
     ctx = SimpleNamespace(obj=state)
     monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
     monkeypatch.setattr(cli.time, "monotonic", iter([0.0, 1.0, 999.0]).__next__)
-    with pytest.raises(TimeoutError):
+    with pytest.raises(TimeoutError) as ei:
         cli._maybe_wait(ctx, "pve1", "UPID:pve1:0001")
+    assert isinstance(ei.value, cli.TaskTimeout)
+    assert ei.value.extra["upid"] == "UPID:pve1:0001"
+    assert ei.value.extra["node"] == "pve1"
+    assert "task wait" in ei.value.extra["hint"]
 
 
 def test_maybe_wait_raises_on_failed_task(monkeypatch):
@@ -581,8 +598,12 @@ def test_maybe_wait_raises_on_failed_task(monkeypatch):
     state.client = client
     ctx = SimpleNamespace(obj=state)
     monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError) as ei:
         cli._maybe_wait(ctx, "pve1", "UPID:x")
+    assert isinstance(ei.value, cli.TaskFailed)
+    assert ei.value.extra["upid"] == "UPID:x"
+    assert ei.value.extra["node"] == "pve1"
+    assert "task log" in ei.value.extra["hint"]
 
 
 def test_error_json_envelope_readonly(fake_client, creds):
@@ -648,11 +669,32 @@ def test_execute_runs_call_and_emits_ok(capsys):
     ctx = _exec_ctx(json=True, dangerous=True)
     result = cli._execute(
         ctx, op="vm.set", message="Set VM 100", node="pve1",
-        call=lambda: "UPID:done", params={"cores": "4"},
+        call=lambda: "UPID:done", params={"cores": "4"}, vmid=100,
     )
     payload = json.loads(capsys.readouterr().out)
-    assert payload["ok"] is True and payload["result"] == "UPID:done"
+    assert payload["ok"] is True
+    assert payload["op"] == "vm.set" and payload["node"] == "pve1" and payload["vmid"] == 100
+    assert payload["upid"] == "UPID:done"
     assert result == "UPID:done"
+
+
+def test_ok_human_prints_hint_and_detail(capsys):
+    state = cli.State(settings=None)
+    ctx = SimpleNamespace(obj=state)
+    cli._ok(ctx, "did it", upid="UPID:x", hint="check with `pmox task wait UPID:x`")
+    out = plain(capsys.readouterr().out)
+    assert "did it" in out and "UPID:x" in out and "task wait" in out
+
+
+def test_execute_sync_result_kept_in_result_field(capsys):
+    ctx = _exec_ctx(json=True, dangerous=True)
+    cli._execute(
+        ctx, op="vm.set", message="m", node="pve1",
+        call=lambda: ["something", "else"], vmid=100,
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["result"] == ["something", "else"]
+    assert "upid" not in payload and "task" not in payload
 
 
 def test_execute_blocks_when_not_dangerous():
@@ -700,7 +742,8 @@ def test_power_wait_reports_task(fake_client, creds, monkeypatch):
     r = inv(["--json", "--dangerous", "--wait", "vm", "start", "100"], creds)
     assert r.exit_code == 0, r.output
     payload = json.loads(r.output)
-    assert payload["result"]["exitstatus"] == "OK"
+    assert payload["task"]["exitstatus"] == "OK"
+    assert "result" not in payload
 
 
 # ------------------------------------------------- Task 7: create/clone/migrate/delete/snap via _execute --
@@ -1675,3 +1718,376 @@ def test_vm_up_readonly_does_not_generate_key(fake_client, creds, tmp_path, monk
     assert r.exit_code == 4, r.output
     assert calls == []            # gate blocked BEFORE any key generation
     assert not missing.exists()
+
+
+# ----------------------------------- structured success envelopes (vmid & co) --
+
+
+def test_vm_new_image_envelope_has_vmid(fake_client, creds, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.storage_content.return_value = []
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.download_url.return_value = "UPID:dl"
+    fake_client.create_guest.return_value = "UPID:create"
+    fake_client.guest_power.return_value = "UPID:start"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--json", "--dangerous", "vm", "new", "web", "--image", "ubuntu-24.04",
+             "--node", "pve1", "--vmid", "150"], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["ok"] is True
+    assert payload["vmid"] == 150 and payload["node"] == "pve1"
+    assert payload["op"] == "qemu.new.image"
+
+
+def test_vm_new_from_template_envelope_has_vmid(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.resolve_node.return_value = "pve1"
+    fake_client.clone_guest.return_value = "UPID:clone"
+    fake_client.guest_power.return_value = "UPID:start"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--json", "--dangerous", "vm", "new", "web", "--from-template", "9000", "--vmid", "120"], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["vmid"] == 120 and payload["node"] == "pve1"
+    assert payload["op"] == "qemu.new.from_template"
+    assert payload["template"] == 9000
+
+
+def test_ct_new_envelope_has_vmid(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.list_appliances.return_value = [{"template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"}]
+    fake_client.storage_content.return_value = []
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.download_appliance.return_value = "UPID:apl"
+    fake_client.create_guest.return_value = "UPID:create"
+    fake_client.guest_power.return_value = "UPID:start"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--json", "--dangerous", "ct", "new", "box", "--template", "ubuntu-24.04",
+             "--node", "pve1", "--vmid", "300"], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["vmid"] == 300 and payload["node"] == "pve1"
+    assert payload["op"] == "lxc.new"
+
+
+def test_image_pull_envelope_has_volid_and_upid(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.storage_content.return_value = []
+    fake_client.download_url.return_value = "UPID:dl"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--json", "--dangerous", "image", "pull", "ubuntu-24.04", "--storage", "local", "--node", "pve1"], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["volid"] == "local:import/noble-server-cloudimg-amd64.qcow2"
+    assert payload["upid"] == "UPID:dl"
+    assert payload["op"] == "image.pull"
+
+
+def test_image_pull_cached_envelope_has_volid(fake_client, creds):
+    fake_client.storage_content.return_value = [{"volid": "local:import/noble-server-cloudimg-amd64.qcow2"}]
+    r = inv(["--json", "--dangerous", "image", "pull", "ubuntu-24.04", "--storage", "local", "--node", "pve1"], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["volid"] == "local:import/noble-server-cloudimg-amd64.qcow2"
+    assert "upid" not in payload  # nothing downloaded
+
+
+def test_image_pull_as_template_envelope_has_vmid(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.storage_content.return_value = []
+    fake_client.download_url.return_value = "UPID:dl"
+    fake_client.create_guest.return_value = "UPID:create"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--json", "--dangerous", "image", "pull", "ubuntu-24.04", "--storage", "local", "--node", "pve1",
+             "--as-template", "--vmid", "9000"], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["vmid"] == 9000 and payload["node"] == "pve1"
+    assert payload["op"] == "image.pull.template"
+
+
+def test_image_pull_ct_envelope_has_volid(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.list_appliances.return_value = [{"template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"}]
+    fake_client.storage_content.return_value = []
+    fake_client.download_appliance.return_value = "UPID:apl"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--json", "--dangerous", "image", "pull", "ubuntu-24.04", "--ct", "--storage", "local", "--node", "pve1"], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["volid"] == "local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
+    assert payload["op"] == "image.pull.ct"
+
+
+def test_vm_up_json_envelope_dhcp_hint(fake_client, creds, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("ssh-ed25519 AAAA u@h")
+    fake_client.cluster_nextid.return_value = "150"
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.storage_content.return_value = []
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--json", "--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+             "--ssh-key", str(key)], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["ok"] is True and payload["op"] == "qemu.up"
+    assert payload["vmid"] == 150 and payload["ip"] is None
+    assert "hint" in payload  # machine-actionable next step for the DHCP case
+
+
+def test_clone_envelope_reports_new_vmid(fake_client, creds):
+    fake_client.resolve_node.return_value = "pve1"
+    fake_client.clone_guest.return_value = "UPID:clone"
+    r = inv(["--json", "--dangerous", "vm", "clone", "100", "--newid", "105"], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["vmid"] == 105  # the clone's id, not the source
+
+
+# ------------------------------------- structured failure envelopes (errors.py) --
+
+
+def test_wait_failed_task_envelope_has_upid_node_hint(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.resolve_node.return_value = "pve1"
+    fake_client.guest_power.return_value = "UPID:pve1:dead"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "got signal 11"}
+    r = inv(["--json", "--dangerous", "--wait", "vm", "start", "100"], creds)
+    assert r.exit_code == 1, r.output
+    payload = json.loads(r.output)
+    assert payload["ok"] is False and payload["error"] == "error"
+    assert payload["upid"] == "UPID:pve1:dead"
+    assert payload["node"] == "pve1"
+    assert "task log" in payload["hint"]
+
+
+def test_error_human_mode_prints_hint(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.resolve_node.return_value = "pve1"
+    fake_client.guest_power.return_value = "UPID:pve1:dead"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "boom"}
+    r = inv(["--no-json", "--dangerous", "--wait", "vm", "start", "100"], creds)
+    assert r.exit_code == 1, r.output
+    assert "task log" in plain(r.output)
+
+
+# -------------------------------------------------- friendly network errors --
+
+
+def test_network_error_dns_concise(fake_client, creds):
+    import requests
+
+    wall = (
+        "HTTPSConnectionPool(host='pve.local', port=8006): Max retries exceeded with url: "
+        "/api2/json/version (Caused by NameResolutionError(\"<urllib3.connection.HTTPSConnection object>: "
+        "Failed to resolve 'pve.local' ([Errno 11001] getaddrinfo failed)\"))"
+    )
+    fake_client.version.side_effect = requests.exceptions.ConnectionError(wall)
+    r = inv(["--json", "version"], creds)
+    assert r.exit_code == 1, r.output
+    payload = json.loads(r.output)
+    assert payload["error"] == "network"
+    assert "Failed to resolve 'pve.local'" in payload["message"]
+    assert "Max retries" not in payload["message"]
+    assert "PROXMOX_HOST" in payload["message"]
+
+
+def test_network_error_ssl_mentions_verify_flag(fake_client, creds):
+    import requests
+
+    fake_client.version.side_effect = requests.exceptions.SSLError(
+        "certificate verify failed: self-signed certificate"
+    )
+    r = inv(["--json", "version"], creds)
+    assert r.exit_code == 1, r.output
+    payload = json.loads(r.output)
+    assert payload["error"] == "network"
+    assert "--no-verify-ssl" in payload["message"] or "PROXMOX_VERIFY_SSL" in payload["message"]
+
+
+def test_network_error_timeout(fake_client, creds):
+    import requests
+
+    fake_client.version.side_effect = requests.exceptions.ReadTimeout("read timed out")
+    r = inv(["--json", "version"], creds)
+    assert r.exit_code == 1, r.output
+    payload = json.loads(r.output)
+    assert payload["error"] == "network"
+    assert "imed out" in payload["message"]
+
+
+def test_network_error_human_label(fake_client, creds):
+    import requests
+
+    fake_client.version.side_effect = requests.exceptions.ConnectionError("Connection refused")
+    r = inv(["--no-json", "version"], creds)
+    assert r.exit_code == 1, r.output
+    assert "Network error" in plain(r.output)
+
+
+def test_concise_network_reason_resolve():
+    msg = "blah (Caused by NameResolutionError(\"Failed to resolve 'pve.local' (no DNS)\"))"
+    assert cli._concise_network_reason(Exception(msg)) == "Failed to resolve 'pve.local'"
+
+
+def test_concise_network_reason_errno():
+    out = cli._concise_network_reason(Exception("x (Caused by ... [Errno 111] Connection refused))"))
+    assert out.startswith("[Errno 111] Connection refused")
+
+
+def test_concise_network_reason_keyword():
+    assert "refused" in cli._concise_network_reason(Exception("NewConnectionError: connection refused by peer"))
+
+
+def test_concise_network_reason_fallback_truncates():
+    assert len(cli._concise_network_reason(Exception("x" * 500))) <= 160
+
+
+# ------------------------------------------------- usage errors via main() --
+
+
+def _run_main(monkeypatch, capsys, argv, env=None):
+    for key, value in (env or {}).items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(cli.sys, "argv", ["pmox", *argv])
+    with pytest.raises(SystemExit) as ei:
+        cli.main()
+    out, err = capsys.readouterr()
+    code = ei.value.code
+    return (0 if code is None else code), out, err
+
+
+def test_main_unknown_command_json_envelope(monkeypatch, capsys):
+    code, out, err = _run_main(monkeypatch, capsys, ["vm", "badcmd"], env={"PMOX_JSON": "1"})
+    assert code == 2
+    payload = json.loads(out)
+    assert payload["ok"] is False and payload["error"] == "usage"
+    assert "badcmd" in payload["message"]
+    assert "--help" in payload["hint"]
+
+
+def test_main_unknown_option_json_envelope(monkeypatch, capsys):
+    code, out, err = _run_main(monkeypatch, capsys, ["vm", "list", "--bogus"], env={"PMOX_JSON": "1"})
+    assert code == 2
+    payload = json.loads(out)
+    assert payload["error"] == "usage"
+    assert "--bogus" in payload["message"]
+
+
+def test_main_usage_error_human_keeps_click_text(monkeypatch, capsys):
+    code, out, err = _run_main(monkeypatch, capsys, ["vm", "badcmd"], env={"PMOX_JSON": "0"})
+    assert code == 2
+    assert "badcmd" in err
+    assert out == ""
+
+
+def test_main_no_args_json_short_message(monkeypatch, capsys):
+    code, out, err = _run_main(monkeypatch, capsys, [], env={"PMOX_JSON": "1"})
+    assert code == 2
+    payload = json.loads(out)
+    assert payload["error"] == "usage"
+    assert len(payload["message"]) < 200  # not the full help wall
+    assert "--help" in payload["hint"]
+
+
+def test_main_no_args_human_shows_help(monkeypatch, capsys):
+    code, out, err = _run_main(monkeypatch, capsys, [], env={"PMOX_JSON": "0"})
+    assert code == 2
+    assert "Usage" in (out + err)
+
+
+def test_main_version_flag_exits_zero(monkeypatch, capsys):
+    code, out, err = _run_main(monkeypatch, capsys, ["--version"])
+    assert code == 0
+    assert "pmox" in out
+
+
+def test_main_translates_abort_to_exit1(monkeypatch, capsys):
+    def fake_app(**kw):
+        raise cli.click.exceptions.Abort()
+
+    monkeypatch.setattr(cli, "app", fake_app)
+    monkeypatch.setattr(cli.sys, "argv", ["pmox", "vm", "list"])
+    with pytest.raises(SystemExit) as ei:
+        cli.main()
+    assert ei.value.code == 1
+
+
+def test_main_other_click_exception_json(monkeypatch, capsys):
+    def fake_app(**kw):
+        raise cli.click.exceptions.ClickException("kaboom")
+
+    monkeypatch.setattr(cli, "app", fake_app)
+    code, out, err = _run_main(monkeypatch, capsys, ["vm", "list"], env={"PMOX_JSON": "1"})
+    assert code == 1
+    payload = json.loads(out)
+    assert payload["error"] == "error" and "kaboom" in payload["message"]
+
+
+def test_main_other_click_exception_human(monkeypatch, capsys):
+    def fake_app(**kw):
+        raise cli.click.exceptions.ClickException("kaboom")
+
+    monkeypatch.setattr(cli, "app", fake_app)
+    code, out, err = _run_main(monkeypatch, capsys, ["vm", "list"], env={"PMOX_JSON": "0"})
+    assert code == 1
+    assert "kaboom" in err
+
+
+def test_main_dangling_subgroup_json_envelope(monkeypatch, capsys):
+    code, out, err = _run_main(monkeypatch, capsys, ["vm"], env={"PMOX_JSON": "1"})
+    assert code == 2
+    payload = json.loads(out)
+    assert payload["error"] == "usage"
+    assert payload["message"] == "Missing command for `pmox vm`."
+
+
+def test_dangling_group_path_cases():
+    assert cli._dangling_group_path([]) == "pmox"
+    assert cli._dangling_group_path(["vm"]) == "pmox vm"
+    assert cli._dangling_group_path(["--json", "vm", "snapshot"]) == "pmox vm snapshot"
+    assert cli._dangling_group_path(["--timeout", "5"]) == "pmox"   # globals only
+    assert cli._dangling_group_path(["vm", "list"]) is None         # complete command
+    assert cli._dangling_group_path(["vm", "nope"]) is None         # unknown token
+    assert cli._dangling_group_path(["--version"]) is None          # eager option short-circuits
+    assert cli._dangling_group_path(["--timeout"]) is None          # value flag missing its value
+    assert cli._dangling_group_path(["vm", "--help"]) is None       # option token
+
+
+def test_handle_parse_error_no_args_json(monkeypatch, capsys):
+    monkeypatch.setenv("PMOX_JSON", "1")
+    cmd = cli.typer.main.get_command(cli.app)
+    ctx = cli.click.core.Context(cmd, info_name="pmox")
+    exc = cli.click.exceptions.NoArgsIsHelpError(ctx)
+    capsys.readouterr()  # swallow the help printed as a ctor side effect
+    code = cli._handle_parse_error(["vm"], exc)
+    assert code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"] == "usage"
+    assert payload["message"].startswith("Missing command")
+
+
+def test_handle_parse_error_no_args_human_does_not_reprint(monkeypatch, capsys):
+    monkeypatch.setenv("PMOX_JSON", "0")
+    cmd = cli.typer.main.get_command(cli.app)
+    ctx = cli.click.core.Context(cmd, info_name="pmox")
+    exc = cli.click.exceptions.NoArgsIsHelpError(ctx)
+    capsys.readouterr()
+    code = cli._handle_parse_error(["vm"], exc)
+    out, err = capsys.readouterr()
+    assert code == 2
+    assert out == "" and err == ""  # the ctor side effect already printed the help
+
+
+def test_json_mode_from_argv_flag_beats_env(monkeypatch):
+    monkeypatch.setenv("PMOX_JSON", "0")
+    assert cli._json_mode_from_argv(["--json", "vm", "list"]) is True
+    monkeypatch.setenv("PMOX_JSON", "1")
+    assert cli._json_mode_from_argv(["--no-json", "vm", "list"]) is False
+
+
+def test_json_mode_from_argv_ignores_after_double_dash(monkeypatch):
+    monkeypatch.setenv("PMOX_JSON", "0")
+    assert cli._json_mode_from_argv(["vm", "list", "--", "--json"]) is False

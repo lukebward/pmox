@@ -28,11 +28,18 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import List, Optional
 
+import requests
 import typer
+
+try:  # typer >= 0.26 vendors click as typer._click; older typer uses the real package
+    import click
+except ModuleNotFoundError:
+    from typer import _click as click
 
 from . import __version__, catalog, ipam, provision, views
 from .client import ProxmoxClient
 from .config import ConfigError, Settings, _parse_bool, load_settings
+from .errors import PlanError, PmoxError, TaskFailed, TaskTimeout
 from .output import (
     Column,
     build_kv_table,
@@ -194,10 +201,11 @@ _POLL_SECONDS = 2
 
 
 def _maybe_wait(ctx: typer.Context, node: str, result):
-    """If ``result`` is a task UPID and --wait is set, poll until the task finishes.
+    """If ``result`` is a task UPID, poll until the task finishes.
 
     Returns the final task-status dict, or the original ``result`` if it is not a
-    UPID. Raises ``TimeoutError`` if the task does not finish within --timeout.
+    UPID. Raises :class:`TaskFailed` / :class:`TaskTimeout` (both carry the upid
+    and node in ``extra`` so the error envelope stays machine-actionable).
     """
     if not (isinstance(result, str) and result.startswith("UPID:")):
         return result
@@ -208,10 +216,26 @@ def _maybe_wait(ctx: typer.Context, node: str, result):
         if status.get("status") == "stopped":
             exitstatus = status.get("exitstatus")
             if exitstatus is not None and exitstatus != "OK":
-                raise RuntimeError(f"Task {result} failed: {exitstatus}")
+                raise TaskFailed(
+                    f"Task {result} failed: {exitstatus}",
+                    extra={
+                        "upid": result,
+                        "node": node,
+                        "hint": f"`pmox task log {result} --node {node}` shows the failure details.",
+                    },
+                )
             return status
         if time.monotonic() >= deadline:
-            raise TimeoutError(f"Task {result} did not finish within {ctx.obj.timeout}s.")
+            raise TaskTimeout(
+                f"Task {result} did not finish within {ctx.obj.timeout}s; "
+                "it may still be running on the server.",
+                extra={
+                    "upid": result,
+                    "node": node,
+                    "hint": f"Resume waiting with `pmox task wait {result}`, or inspect with "
+                            f"`pmox task status {result} --node {node}`.",
+                },
+            )
         time.sleep(_POLL_SECONDS)
 
 
@@ -223,6 +247,7 @@ def _execute(
     node,
     call,
     params=None,
+    vmid=None,
     destructive: bool = False,
     yes: bool = False,
     confirm_msg: Optional[str] = None,
@@ -235,7 +260,7 @@ def _execute(
     """
     state: State = ctx.obj
     if state.dry_run:
-        _emit_dry_run(op, node, params)
+        _emit_dry_run(op, node, params, vmid=vmid)
         return None
     require_dangerous(state.dangerous)
     if destructive:
@@ -243,7 +268,16 @@ def _execute(
     result = call()
     if state.wait:
         result = _maybe_wait(ctx, node, result)
-    _ok(ctx, message, result)
+    fields: dict = {"op": op, "node": node}
+    if vmid is not None:
+        fields["vmid"] = vmid
+    if isinstance(result, str) and result.startswith("UPID:"):
+        fields["upid"] = result
+    elif isinstance(result, dict):
+        fields["task"] = result
+    elif result is not None:
+        fields["result"] = result
+    _ok(ctx, message, **fields)
     return result
 
 
@@ -277,40 +311,78 @@ def merge_tags(current: str, add: Optional[str] = None, remove: Optional[str] = 
     return ";".join(tags)
 
 
-def _ok(ctx: typer.Context, message: str, result=None) -> None:
+def _ok(ctx: typer.Context, message: str, **fields) -> None:
+    """Emit a success envelope: ``{"ok": true, "message": ..., **fields}``.
+
+    Typed fields (``op``, ``vmid``, ``node``, ``upid``, ``task``, ``hint``, …)
+    let an agent read results without parsing the message prose. Fields passed
+    explicitly are kept even when ``None`` (stable shape).
+    """
     state: State = ctx.obj
     if state.json:
-        print(json.dumps({"ok": True, "message": message, "result": result}, default=str, indent=2))
+        print(json.dumps({"ok": True, "message": message, **fields}, default=str, indent=2))
     else:
         console.print(f"[green]✓[/green] {message}")
-        if result:
-            console.print(f"  [dim]{result}[/dim]")
+        detail = fields.get("upid") or fields.get("task") or fields.get("result")
+        if detail:
+            console.print(f"  [dim]{detail}[/dim]")
+        if fields.get("hint"):
+            console.print(f"  [dim]{fields['hint']}[/dim]")
 
 
-def _emit_error(json_output: bool, error: str, message: str, code: int, need=None) -> None:
+def _emit_error(json_output: bool, error: str, message: str, code: int, need=None, extra=None) -> None:
     if json_output:
         payload = {"ok": False, "error": error, "message": message}
         if need:
             payload["need"] = need
+        if extra:
+            payload.update(extra)
         print(json.dumps(payload, default=str, indent=2))
     else:
         label = {
             "read_only": ("yellow", "Read-only"),
             "confirm_required": ("yellow", "Aborted"),
             "config": ("red", "Config error"),
+            "network": ("red", "Network error"),
+            "usage": ("red", "Usage error"),
             "error": ("red", "Error"),
         }[error]
         err_console.print(f"[{label[0]}]{label[1]}:[/{label[0]}] {message}")
+        if extra and extra.get("hint"):
+            err_console.print(f"[dim]{extra['hint']}[/dim]")
     raise typer.Exit(code)
 
 
-def _emit_dry_run(op: str, node, params) -> None:
-    print(json.dumps({"dry_run": True, "op": op, "node": node, "params": params or {}}, default=str, indent=2))
+def _emit_dry_run(op: str, node, params, vmid=None) -> None:
+    payload: dict = {"dry_run": True, "op": op, "node": node}
+    if vmid is not None:
+        payload["vmid"] = vmid
+    payload["params"] = params or {}
+    print(json.dumps(payload, default=str, indent=2))
+
+
+def _concise_network_reason(exc: BaseException) -> str:
+    """Boil a requests/urllib3 exception wall down to its root cause."""
+    text = str(exc)
+    m = re.search(r"Failed to resolve '[^']+'", text)
+    if m:
+        return m.group(0)
+    m = re.search(r"\[(?:WinError|Errno) [^\]]+\][^'\")(]*", text)
+    if m:
+        return m.group(0).strip()
+    m = re.search(
+        r"(connection refused|connection reset[^'\")]*|timed out|certificate verify failed[^'\")]*)",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        return m.group(0)
+    return text[:160]
 
 
 @contextmanager
 def error_boundary(json_output: bool = False):
-    """Translate exceptions into friendly messages and distinct exit codes."""
+    """Translate exceptions into friendly messages, structured envelopes, and exit codes."""
     try:
         yield
     except typer.Exit:
@@ -321,6 +393,26 @@ def error_boundary(json_output: bool = False):
         _emit_error(json_output, "confirm_required", str(exc), 3, need=["--yes"])
     except ConfigError as exc:
         _emit_error(json_output, "config", str(exc), 2)
+    except PmoxError as exc:
+        _emit_error(json_output, "error", str(exc), 1, extra=exc.extra)
+    except requests.exceptions.SSLError as exc:
+        _emit_error(
+            json_output, "network",
+            f"TLS verification failed talking to the Proxmox API: {_concise_network_reason(exc)}. "
+            "For self-signed certificates use --no-verify-ssl (or PROXMOX_VERIFY_SSL=false).", 1,
+        )
+    except requests.exceptions.Timeout as exc:
+        _emit_error(
+            json_output, "network",
+            f"Timed out talking to the Proxmox API: {_concise_network_reason(exc)}. "
+            "The node may be slow or unreachable; check PROXMOX_HOST/PROXMOX_PORT.", 1,
+        )
+    except requests.exceptions.ConnectionError as exc:
+        _emit_error(
+            json_output, "network",
+            f"Cannot reach the Proxmox API: {_concise_network_reason(exc)}. "
+            "Check PROXMOX_HOST/PROXMOX_PORT and network connectivity.", 1,
+        )
     except Exception as exc:  # noqa: BLE001 - top-level CLI guard
         _emit_error(json_output, "error", str(exc), 1)
 
@@ -607,6 +699,7 @@ def _make_power_command(group, kind, label, action, destructive, description):
                 node=resolved,
                 call=lambda: client.guest_power(resolved, kind, vmid, action),
                 params={"vmid": vmid, "action": action},
+                vmid=vmid,
                 destructive=destructive,
                 yes=yes,
                 confirm_msg=f"{action} {label.lower()} {vmid} on {resolved}",
@@ -699,6 +792,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 node=resolved,
                 call=lambda: client.update_config(resolved, kind, vmid, **params),
                 params=params,
+                vmid=vmid,
                 destructive=set_requires_confirmation(params),
                 yes=yes,
                 confirm_msg=f"set {label.lower()} {vmid}: remove {params.get('delete')}",
@@ -722,6 +816,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 node=resolved,
                 call=lambda: client.resize_disk(resolved, kind, vmid, disk, size),
                 params={"vmid": vmid, "disk": disk, "size": size},
+                vmid=vmid,
             )
 
     @group.command("rename", help=f"Rename a {label}.")
@@ -742,6 +837,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 node=resolved,
                 call=lambda: client.update_config(resolved, kind, vmid, **{key: newname}),
                 params={"vmid": vmid, key: newname},
+                vmid=vmid,
             )
 
     @group.command("tag", help=f"Add/remove/set tags on a {label}.")
@@ -765,6 +861,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 node=resolved,
                 call=lambda: client.update_config(resolved, kind, vmid, tags=new_tags),
                 params={"vmid": vmid, "tags": new_tags},
+                vmid=vmid,
             )
 
     for action, destructive, description in [
@@ -801,6 +898,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 node=node,
                 call=lambda: client.create_guest(node, kind, vmid, **params),
                 params={"vmid": vmid, **params},
+                vmid=vmid,
             )
 
     if kind == "qemu":
@@ -854,7 +952,10 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                         return
                     require_dangerous(ctx.obj.dangerous)
                     provision.execute_plan(client, target_node, plan, waiter=lambda n, upid: _maybe_wait(ctx, n, upid))
-                    _ok(ctx, f"Cloned template {from_template} -> VM {target_vmid} on {target_node}")
+                    _ok(
+                        ctx, f"Cloned template {from_template} -> VM {target_vmid} on {target_node}",
+                        op="qemu.new.from_template", vmid=target_vmid, node=target_node, template=from_template,
+                    )
                     return
 
                 target_node = node or _single_node_or_die(client)
@@ -891,7 +992,10 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                         return
                     require_dangerous(ctx.obj.dangerous)
                     provision.execute_plan(client, target_node, plan, waiter=lambda n, upid: _maybe_wait(ctx, n, upid))
-                    _ok(ctx, f"Created cloud-init VM {target_vmid} on {target_node} from {image}")
+                    _ok(
+                        ctx, f"Created cloud-init VM {target_vmid} on {target_node} from {image}",
+                        op="qemu.new.image", vmid=target_vmid, node=target_node,
+                    )
                     return
 
                 # blank shell (B2 behavior)
@@ -910,6 +1014,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                     node=target_node,
                     call=lambda: client.create_guest(target_node, "qemu", target_vmid, **params),
                     params={"vmid": target_vmid, **params},
+                    vmid=target_vmid,
                 )
 
         @group.command("up", help="Create a ready-to-SSH VM with an auto-allocated static IP (seamless, token-only).")
@@ -997,15 +1102,29 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 sshkeys = provision.ensure_ssh_key(key_path) if key_path else None
                 provision.execute_plan(client, target_node, _build(sshkeys), waiter=lambda n, upid: _maybe_wait(ctx, n, upid))
 
+                ssh_val = f"ssh {chosen_ciuser}@{chosen_ip}" if (chosen_ip and chosen_ciuser) else None
+                if chosen_ip:
+                    hint = f"Connect with `{ssh_val}`." if ssh_val else (
+                        f"Connect to {chosen_ip} as the image's default user (e.g. 'ubuntu' on Ubuntu)."
+                    )
+                elif from_template is not None:
+                    hint = (f"The address comes from DHCP; once the template's guest agent is up, "
+                            f"`pmox vm ip {target_vmid} --wait` returns it.")
+                else:
+                    hint = ("The address comes from DHCP and is not known here. Check your router's DHCP "
+                            "leases, or use --ip / a [network] pool for a static address.")
                 if ctx.obj.json:
-                    ssh_val = f"ssh {chosen_ciuser}@{chosen_ip}" if (chosen_ip and chosen_ciuser) else None
-                    emit({"vmid": target_vmid, "name": name, "node": target_node, "ip": chosen_ip, "ssh": ssh_val}, json_output=True)
+                    _ok(
+                        ctx, f"VM {target_vmid} ({name}) is up on {target_node}",
+                        op="qemu.up", vmid=target_vmid, name=name, node=target_node,
+                        ip=chosen_ip, ssh=ssh_val, hint=hint,
+                    )
                 elif chosen_ip:
                     console.print(f"VM {target_vmid}  {name}  ip {chosen_ip}")
-                    console.print(f"ssh {chosen_ciuser}@{chosen_ip}" if chosen_ciuser else f"ssh <image's default user>@{chosen_ip}")
+                    console.print(ssh_val or f"ssh <image's default user>@{chosen_ip}")
                 else:
                     console.print(f"VM {target_vmid}  {name}  ip via DHCP (not known yet)")
-                    console.print("Find it in your router's DHCP leases, or set a [network] pool for an auto-assigned static IP.")
+                    console.print(hint)
 
     if kind == "lxc":
 
@@ -1051,7 +1170,10 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                     return
                 require_dangerous(ctx.obj.dangerous)
                 provision.execute_plan(client, target_node, plan, waiter=lambda n, upid: _maybe_wait(ctx, n, upid))
-                _ok(ctx, f"Created container {target_vmid} on {target_node} from {template}")
+                _ok(
+                    ctx, f"Created container {target_vmid} on {target_node} from {template}",
+                    op="lxc.new", vmid=target_vmid, node=target_node,
+                )
 
     @group.command("clone")
     def _clone(
@@ -1080,6 +1202,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 node=resolved,
                 call=lambda: client.clone_guest(resolved, kind, vmid, newid, **params),
                 params={"vmid": vmid, "newid": newid, **params},
+                vmid=newid,
             )
 
     @group.command("migrate")
@@ -1104,6 +1227,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 node=resolved,
                 call=lambda: client.migrate_guest(resolved, kind, vmid, target, **params),
                 params={"vmid": vmid, "target": target, **params},
+                vmid=vmid,
                 destructive=True,
                 yes=yes,
                 confirm_msg=f"migrate {label.lower()} {vmid} from {resolved} to {target}",
@@ -1127,6 +1251,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 node=resolved,
                 call=lambda: client.delete_guest(resolved, kind, vmid, purge=purge),
                 params={"vmid": vmid, "purge": purge},
+                vmid=vmid,
                 destructive=True,
                 yes=yes,
                 confirm_msg=f"DELETE {label.lower()} {vmid} on {resolved} (irreversible)",
@@ -1171,6 +1296,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 node=resolved,
                 call=lambda: client.create_snapshot(resolved, kind, vmid, name, **params),
                 params={"vmid": vmid, "snapname": name, **params},
+                vmid=vmid,
             )
 
     @snap.command("delete")
@@ -1191,6 +1317,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 node=resolved,
                 call=lambda: client.delete_snapshot(resolved, kind, vmid, name),
                 params={"vmid": vmid, "snapname": name},
+                vmid=vmid,
                 destructive=True,
                 yes=yes,
                 confirm_msg=f"delete snapshot {name!r} of {label.lower()} {vmid}",
@@ -1214,6 +1341,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 node=resolved,
                 call=lambda: client.rollback_snapshot(resolved, kind, vmid, name),
                 params={"vmid": vmid, "snapname": name},
+                vmid=vmid,
                 destructive=True,
                 yes=yes,
                 confirm_msg=f"ROLLBACK {label.lower()} {vmid} to snapshot {name!r} (loses current state)",
@@ -1381,11 +1509,11 @@ def image_pull(
                 return
             require_dangerous(ctx.obj.dangerous)
             if any(c.get("volid") == volid for c in client.storage_content(node, storage)):
-                _ok(ctx, f"Template already present: {volid}")
+                _ok(ctx, f"Template already present: {volid}", op="image.pull.ct", node=node, volid=volid)
                 return
             upid = client.download_appliance(node, storage, filename)
             _maybe_wait(ctx, node, upid)
-            _ok(ctx, f"Pulled container template {image} -> {volid}", upid)
+            _ok(ctx, f"Pulled container template {image} -> {volid}", op="image.pull.ct", node=node, volid=volid, upid=upid)
             return
 
         spec = catalog.resolve_image(image)
@@ -1400,7 +1528,10 @@ def image_pull(
                 return
             require_dangerous(ctx.obj.dangerous)
             provision.execute_plan(client, node, plan, waiter=lambda n, upid: _maybe_wait(ctx, n, upid))
-            _ok(ctx, f"Built template {target_vmid} on {node} from {image}")
+            _ok(
+                ctx, f"Built template {target_vmid} on {node} from {image}",
+                op="image.pull.template", vmid=target_vmid, node=node,
+            )
             return
 
         volid = f"{storage}:import/{spec['filename']}"
@@ -1409,14 +1540,14 @@ def image_pull(
             return
         require_dangerous(ctx.obj.dangerous)
         if any(c.get("volid") == volid for c in client.storage_content(node, storage)):
-            _ok(ctx, f"Image already present: {volid}")
+            _ok(ctx, f"Image already present: {volid}", op="image.pull", node=node, volid=volid)
             return
         upid = client.download_url(
             node, storage, url=spec["url"], content="import", filename=spec["filename"],
             checksum=spec["checksum"], checksum_algorithm=spec["algo"],
         )
         _maybe_wait(ctx, node, upid)
-        _ok(ctx, f"Pulled {image} → {volid}", upid)
+        _ok(ctx, f"Pulled {image} → {volid}", op="image.pull", node=node, volid=volid, upid=upid)
 
 
 app.add_typer(nodes_app, name="nodes")
@@ -1428,8 +1559,109 @@ app.add_typer(task_app, name="task")
 app.add_typer(image_app, name="image")
 
 
+def _json_mode_from_argv(argv: List[str]) -> bool:
+    """Best-effort JSON-mode resolution for errors raised before Typer has a context."""
+    flag: Optional[bool] = None
+    for tok in argv:
+        if tok == "--":
+            break
+        if tok == "--json":
+            flag = True
+        elif tok == "--no-json":
+            flag = False
+    return resolve_json_output(flag, os.environ.get("PMOX_JSON"), _stream_isatty(sys.stdout))
+
+
+def _is_no_args_help_error(exc) -> bool:
+    no_args_cls = getattr(click.exceptions, "NoArgsIsHelpError", None)
+    return no_args_cls is not None and isinstance(exc, no_args_cls)
+
+
+def _handle_parse_error(argv: List[str], exc) -> int:
+    """Emit a click parse failure as a JSON envelope (click's own text in human mode).
+
+    Click usage errors exit 2 — same code as missing config — so the envelope's
+    ``error`` field (``usage`` vs ``config``) is what disambiguates them for agents.
+    """
+    if not _json_mode_from_argv(argv):
+        if not _is_no_args_help_error(exc):  # NoArgsIsHelp already printed the help as a side effect
+            exc.show()
+        return exc.exit_code
+    error = "usage" if isinstance(exc, click.exceptions.UsageError) else "error"
+    ctx = getattr(exc, "ctx", None)
+    path = ctx.command_path if ctx else "pmox"
+    if _is_no_args_help_error(exc):
+        message = f"Missing command for `{path}`."  # exc.message would be the whole help screen
+    else:
+        message = exc.format_message()
+    payload = {
+        "ok": False,
+        "error": error,
+        "message": message,
+        "hint": f"Run `{path} --help` for usage, or `pmox guide` for the full agent guide.",
+    }
+    print(json.dumps(payload, indent=2))
+    return exc.exit_code
+
+
+def _dangling_group_path(argv: List[str]) -> Optional[str]:
+    """Display path ("pmox vm") if ``argv`` names a command group with no subcommand, else None.
+
+    Typer's rich help prints to stdout as a side effect the moment a
+    ``NoArgsIsHelpError`` is constructed, which would corrupt JSON output — so in
+    JSON mode the dangling-group case must be caught *before* invoking the app.
+    """
+    i = 0
+    while i < len(argv):
+        name = argv[i].split("=", 1)[0]
+        if name == "--version":
+            return None  # eager option: parsing short-circuits before any subcommand is needed
+        if name in _GLOBAL_BOOL_FLAGS:
+            i += 1
+        elif name in _GLOBAL_VALUE_FLAGS:
+            i += 1 if "=" in argv[i] else 2
+        else:
+            break
+    if i > len(argv):
+        return None  # value flag missing its value: let click report it
+    try:
+        cmd = typer.main.get_command(app)
+    except Exception:  # noqa: BLE001 - app may be monkeypatched/unusual; let click parse
+        return None
+    # Group-ness is structural: groups carry a non-empty ``commands`` dict, leaves don't.
+    # (typer's vendored click has no Group class to isinstance-check against.)
+    path = ["pmox"]
+    for tok in argv[i:]:
+        if tok.startswith("-"):
+            return None
+        sub = (getattr(cmd, "commands", None) or {}).get(tok)
+        if sub is None:
+            return None
+        cmd = sub
+        path.append(tok)
+    return " ".join(path) if getattr(cmd, "commands", None) else None
+
+
 def main():
-    app(args=hoist_global_flags(sys.argv[1:]))
+    argv = hoist_global_flags(sys.argv[1:])
+    if _json_mode_from_argv(argv):
+        dangling = _dangling_group_path(argv)
+        if dangling is not None:
+            print(json.dumps({
+                "ok": False,
+                "error": "usage",
+                "message": f"Missing command for `{dangling}`.",
+                "hint": f"Run `{dangling} --help` for usage, or `pmox guide` for the full agent guide.",
+            }, indent=2))
+            raise SystemExit(2)
+    try:
+        rv = app(args=argv, standalone_mode=False)
+    except click.exceptions.Abort:
+        err_console.print("Aborted.")
+        raise SystemExit(1)
+    except click.exceptions.ClickException as exc:
+        raise SystemExit(_handle_parse_error(argv, exc))
+    raise SystemExit(rv if isinstance(rv, int) and not isinstance(rv, bool) else 0)
 
 
 if __name__ == "__main__":  # pragma: no cover
