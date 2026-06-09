@@ -1,6 +1,6 @@
 ---
 description: Read-only overview of the Proxmox cluster (nodes, guests, health).
-allowed-tools: Bash(pmox:*), Bash(python:*)
+allowed-tools: Bash(pmox:*), Bash(python -m pmox:*)
 ---
 
 Give me a concise health overview of my Proxmox cluster using the **read-only**

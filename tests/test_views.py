@@ -7,7 +7,7 @@ from pmox import views
 
 def _client():
     c = MagicMock()
-    c.resolve_node.return_value = "pve1"
+    c.locate_guest.return_value = {"vmid": 100, "node": "pve1", "name": "web", "type": "qemu"}
     c.guest_status.return_value = {"status": "running"}
     c.guest_config.return_value = {"cores": 2}
     c.list_snapshots.return_value = [{"name": "pre"}]
@@ -15,7 +15,6 @@ def _client():
         {"id": "100", "type": "qmstart"},
         {"id": "999", "type": "qmstart"},
     ]
-    c.cluster_resources.return_value = [{"vmid": 100, "node": "pve1", "name": "web"}]
     c.agent_network_interfaces.return_value = {"result": []}
     c.lxc_interfaces.return_value = []
     return c
@@ -32,20 +31,19 @@ def test_describe_guest_composes_and_filters_tasks():
     assert out["snapshots"] == [{"name": "pre"}]
     # only this guest's tasks (id == vmid)
     assert out["recent_tasks"] == [{"id": "100", "type": "qmstart"}]
-    c.resolve_node.assert_called_once_with(100)
+    c.locate_guest.assert_called_with(100)
 
 
-def test_describe_guest_uses_explicit_node_without_resolving():
+def test_describe_guest_uses_explicit_node_for_its_own_reads():
     c = _client()
     views.describe_guest(c, "qemu", 100, node="pve2")
-    c.resolve_node.assert_not_called()
     c.guest_status.assert_called_once_with("pve2", "qemu", 100)
 
 
 def test_describe_guest_not_found_raises():
     c = _client()
-    c.resolve_node.return_value = None
-    with pytest.raises(LookupError):
+    c.locate_guest.return_value = None
+    with pytest.raises(LookupError, match="not found"):
         views.describe_guest(c, "qemu", 999)
 
 
@@ -133,24 +131,59 @@ def test_addr_scope_classifies():
     assert views._addr_scope("ipv6", "2001:db8::5") == "global"
 
 
-def test_locate_guest_finds_row():
+def test_locate_guest_checked_passes_matching_kind():
     c = MagicMock()
-    c.cluster_resources.return_value = [
-        {"vmid": 100, "node": "pve1", "name": "web"},
-        {"vmid": 200, "node": "pve2", "name": "db"},
-    ]
-    assert views._locate_guest(c, 200) == {"vmid": 200, "node": "pve2", "name": "db"}
-    assert views._locate_guest(c, 999) is None
+    c.locate_guest.return_value = {"vmid": 100, "node": "pve1", "type": "qemu"}
+    assert views.locate_guest_checked(c, "qemu", 100)["node"] == "pve1"
+    c.locate_guest.assert_called_once_with(100)
+
+
+def test_locate_guest_checked_none_when_missing():
+    c = MagicMock()
+    c.locate_guest.return_value = None
+    assert views.locate_guest_checked(c, "qemu", 999) is None
+
+
+def test_locate_guest_checked_tolerates_rows_without_type():
+    c = MagicMock()
+    c.locate_guest.return_value = {"vmid": 100, "node": "pve1"}
+    assert views.locate_guest_checked(c, "qemu", 100)["node"] == "pve1"
+
+
+def test_locate_guest_checked_container_via_vm_raises():
+    c = MagicMock()
+    c.locate_guest.return_value = {"vmid": 100, "node": "pve1", "type": "lxc", "name": "wireguard"}
+    with pytest.raises(LookupError, match="pmox ct"):
+        views.locate_guest_checked(c, "qemu", 100)
+
+
+def test_locate_guest_checked_vm_via_ct_raises():
+    c = MagicMock()
+    c.locate_guest.return_value = {"vmid": 101, "node": "pve1", "type": "qemu"}
+    with pytest.raises(LookupError, match="pmox vm"):
+        views.locate_guest_checked(c, "lxc", 101)
+
+
+def test_guest_not_found_message_is_actionable():
+    err = views.guest_not_found(999)
+    assert "999" in str(err)
+    assert "vm list" in str(err)
+
+
+def test_describe_guest_wrong_kind_raises():
+    c = _client()  # locate_guest -> a qemu row
+    with pytest.raises(LookupError, match="pmox vm"):
+        views.describe_guest(c, "lxc", 100)
 
 
 def _ip_client(row):
     c = MagicMock()
-    c.cluster_resources.return_value = [row] if row else []
+    c.locate_guest.return_value = row
     return c
 
 
 def test_guest_ip_addresses_qemu_normalizes():
-    c = _ip_client({"vmid": 150, "node": "lukeserver", "name": "web-01"})
+    c = _ip_client({"vmid": 150, "node": "lukeserver", "name": "web-01", "type": "qemu"})
     c.agent_network_interfaces.return_value = {"result": [
         {"name": "lo", "hardware-address": "00:00:00:00:00:00",
          "ip-addresses": [{"ip-address-type": "ipv4", "ip-address": "127.0.0.1", "prefix": 8}]},
@@ -177,7 +210,7 @@ def test_guest_ip_addresses_qemu_normalizes():
 
 
 def test_guest_ip_addresses_lxc_normalizes():
-    c = _ip_client({"vmid": 200, "node": "pve1", "name": "ct-db"})
+    c = _ip_client({"vmid": 200, "node": "pve1", "name": "ct-db", "type": "lxc"})
     c.lxc_interfaces.return_value = [
         {"name": "lo", "hwaddr": "00:00:00:00:00:00", "inet": "127.0.0.1/8"},
         {"name": "eth0", "hwaddr": "aa:bb:cc:dd:ee:ff", "inet": "10.0.0.5/24", "inet6": "fe80::2/64"},
@@ -207,7 +240,7 @@ def test_guest_ip_addresses_not_found_raises():
 
 
 def test_guest_ip_addresses_qemu_agent_down_no_static_ip_raises():
-    c = _ip_client({"vmid": 150, "node": "lukeserver", "name": "web"})
+    c = _ip_client({"vmid": 150, "node": "lukeserver", "name": "web", "type": "qemu"})
     c.agent_network_interfaces.side_effect = RuntimeError("500 guest agent is not running")
     c.guest_config.return_value = {"ipconfig0": "ip=dhcp,ip6=auto"}  # nothing static to fall back to
     with pytest.raises(RuntimeError, match="agent: 1"):
@@ -215,7 +248,7 @@ def test_guest_ip_addresses_qemu_agent_down_no_static_ip_raises():
 
 
 def test_guest_ip_addresses_qemu_falls_back_to_static_ipconfig():
-    c = _ip_client({"vmid": 150, "node": "lukeserver", "name": "web"})
+    c = _ip_client({"vmid": 150, "node": "lukeserver", "name": "web", "type": "qemu"})
     c.agent_network_interfaces.side_effect = RuntimeError("500 guest agent is not running")
     c.guest_config.return_value = {
         "cores": 2,  # non-ipconfig key is ignored
@@ -234,7 +267,7 @@ def test_guest_ip_addresses_qemu_falls_back_to_static_ipconfig():
 
 
 def test_guest_ip_addresses_lxc_stopped_raises():
-    c = _ip_client({"vmid": 200, "node": "pve1", "name": "ct"})
+    c = _ip_client({"vmid": 200, "node": "pve1", "name": "ct", "type": "lxc"})
     c.lxc_interfaces.side_effect = RuntimeError("500 not running")
     with pytest.raises(RuntimeError, match="stopped"):
         views.guest_ip_addresses(c, "lxc", 200)

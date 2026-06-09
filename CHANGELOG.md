@@ -6,6 +6,78 @@ All notable changes to pmox are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-09
+
+Agent-ergonomics release: every error an agent can hit now lands as a
+machine-actionable JSON envelope, mutations return structured results, and
+recovery from interrupted provisioning is a documented, tool-assisted path.
+
+### Added
+
+- **`pmox guide`**: the full agent/automation guide (safety model, exit codes,
+  envelope shapes, recipes, recovery) built into the CLI — any agent can
+  self-onboard in one call, no plugin needed.
+- **`pmox task wait <upid>`**: resume waiting on a server-side task (e.g. after
+  a `--timeout` or an interrupted shell); the node is parsed from the UPID.
+  `task status` / `task log` also no longer require `--node`.
+- **`vm ip --wait` / `ct ip --wait`**: poll until the guest reports an address
+  (bounded by `--timeout`), retrying through agent-not-up errors — completes
+  the DHCP + guest-agent flow after `vm up --from-template`.
+- **`--fields a,b,c`** on all list commands: project rows onto a key subset
+  (missing keys are `null`) to keep output small on big clusters.
+- **`--no-dangerous`**: force read-only mode even when `PMOX_DANGEROUS` is set.
+- **`image pull --checksum <algo>:<hexdigest>`**: verify catalog/URL downloads;
+  the verified, cached image is reused by `vm new` / `vm up` / `--as-template`.
+- Structured **success envelopes** for all mutations:
+  `{ok, message, op, vmid, node, upid | task, hint}` — `vm new`, `ct new`,
+  `image pull --as-template` and `vm up` return the created VMID as a field
+  (previously only embedded in the message prose).
+- Structured **error envelopes**: task failures/timeouts carry `upid`, `node`
+  and a `hint`; partial provisioning failures carry `vmid`, `completed_steps`,
+  `failed_step` and a recovery `hint` (created guests are not cleaned up and a
+  blind retry would duplicate them — the hint says what to do instead).
+- New error codes in the envelope: **`usage`** (exit 2 — bad command line,
+  distinguishing it from `config`) and **`network`** (exit 1 — concise
+  DNS/TLS/timeout diagnosis instead of a urllib3 exception wall).
+- `--storage` for `vm new` / `vm up` / `ct new` now **auto-detects** a capable
+  storage when omitted (local-lvm preferred, validated when explicit) instead
+  of hardcoding `local-lvm`.
+- Fail-fast validation before any download/create: guest names (DNS-label
+  rules — underscores rejected), `--ip` syntax, and `--storage` content types.
+- Node auto-pick for `task list`, `storage content` and `image list --ct` on
+  single-node clusters; multi-node errors list the candidate node names.
+
+### Fixed
+
+- Unknown VMIDs now produce a proper JSON error envelope (previously plain
+  text on stderr, breaking the documented JSON contract) with an actionable
+  message.
+- Using `vm ...` on a container VMID (or `ct ...` on a VM) now errors with the
+  corrective command instead of a misleading Proxmox 500 about a missing
+  config file.
+- `vm up --ip dhcp` no longer reports the literal string `"dhcp"` as the
+  address (`ip` is now `null`, with a hint for finding the real address).
+- `--ssh-key ~/...` is tilde-expanded in `vm new` / `ct new` (PowerShell and
+  quoted shell arguments pass `~` through literally); missing key files get an
+  actionable error. `vm up --ssh-key` is now repeatable like `vm new`'s.
+- Malformed TOML config files now exit 2 with a `config` envelope instead of
+  an unhandled `TOMLDecodeError` traceback.
+- CT template name matching prefers an exact match, then the newest
+  `-standard` build, then the newest substring match (previously: first
+  substring hit in aplinfo order), shared by `ct new` and `image pull --ct`.
+- `PMOX_DANGEROUS` is honored only from the real environment — a `.env` file
+  in the working directory can no longer silently enable dangerous mode.
+- `vm new` / `vm up` warn when `--from-template` ignores `--size` /
+  `--storage` / `-o` options.
+
+### Changed
+
+- Success envelopes replace the untyped `result` field with typed `upid` /
+  `task` / `result` fields (breaking for consumers of the old `"result"` key).
+- Plugin: `allowed-tools` no longer pre-approves arbitrary `python` commands —
+  only `pmox` and `python -m pmox`. The permission trade-off of the blanket
+  `pmox` allow is now documented in `plugin/README.md`.
+
 ## [0.4.0] - 2026-06-07
 
 ### Added
@@ -109,7 +181,9 @@ Initial release.
 - Claude Code plugin (`plugin/`) with a `proxmox` skill and the
   `/pmox:cluster-status`, `/pmox:list-guests`, and `/pmox:run` commands.
 
-[Unreleased]: https://github.com/lukebward/pmox/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/lukebward/pmox/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/lukebward/pmox/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/lukebward/pmox/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/lukebward/pmox/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/lukebward/pmox/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/lukebward/pmox/releases/tag/v0.1.0

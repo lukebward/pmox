@@ -28,6 +28,13 @@ def test_validate_bad_token_id(tmp_path):
         s.validate()
 
 
+def test_malformed_toml_raises_config_error(tmp_path):
+    bad = tmp_path / "bad.toml"
+    bad.write_text("this is not == toml")
+    with pytest.raises(ConfigError, match="Invalid TOML"):
+        load_settings(env={}, config_path=bad)
+
+
 def test_file_then_env_precedence(tmp_path):
     cfg = tmp_path / "c.toml"
     cfg.write_text(

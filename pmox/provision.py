@@ -9,11 +9,15 @@ task UPIDs between dependent steps.
 
 from __future__ import annotations
 
+import ipaddress
+import re
 import subprocess
 from pathlib import Path
+from typing import Optional
 from urllib.parse import quote
 
 from . import catalog
+from .errors import PlanError
 
 
 def encode_sshkeys(text: str) -> str:
@@ -36,9 +40,96 @@ def ensure_ssh_key(path: str) -> str:
     return pub.read_text().strip()
 
 
+def read_ssh_keys(paths) -> Optional[str]:
+    """Read and join SSH public keys, expanding ``~`` (PowerShell and quoted shell
+    arguments pass it through literally)."""
+    keys = []
+    for p in paths or []:
+        path = Path(p).expanduser()
+        if not path.exists():
+            raise FileNotFoundError(
+                f"SSH public key not found: {p}. Generate one with `ssh-keygen -t ed25519` "
+                f"or pass a different --ssh-key."
+            )
+        keys.append(path.read_text().strip())
+    return "\n".join(keys) or None
+
+
+_DNS_LABEL = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+
+
+def validate_guest_name(name: str) -> str:
+    """Fail fast on names Proxmox would reject server-side (DNS-name format).
+
+    Without this, a bad name (underscores are the classic) surfaces as an API
+    error only *after* a potentially minutes-long image download.
+    """
+    text = str(name)
+    if text and len(text) <= 253 and all(_DNS_LABEL.match(label) for label in text.split(".")):
+        return name
+    raise ValueError(
+        f"Invalid guest name {name!r}: must be a DNS name — letters, digits and hyphens "
+        f"(no underscores; labels can't start or end with '-')."
+    )
+
+
+_IPCONFIG_KEYS = frozenset({"gw", "gw6", "ip6"})
+
+
+def validate_ip_spec(spec: str) -> str:
+    """Validate a --ip value: ``dhcp`` or ``<addr>/<prefix>[,gw=<ip>][,gw6=…][,ip6=…]``.
+
+    Returns the normalized spec (``dhcp`` lowercased). Like name validation, this
+    runs before any download/create so typos fail instantly.
+    """
+    if spec.strip().lower() == "dhcp":
+        return "dhcp"
+    addr, _, rest = spec.partition(",")
+    try:
+        if "/" not in addr:
+            raise ValueError
+        ipaddress.ip_interface(addr)
+    except ValueError:
+        raise ValueError(
+            f"Invalid --ip {spec!r}: expected 'dhcp' or '<address>/<prefix>[,gw=<gateway>]' "
+            f"(e.g. 192.168.1.50/24,gw=192.168.1.1)."
+        ) from None
+    for part in filter(None, rest.split(",")):
+        key, sep, val = part.partition("=")
+        if not sep or key not in _IPCONFIG_KEYS:
+            raise ValueError(f"Invalid --ip option {part!r}: allowed keys are gw=, gw6=, ip6=.")
+        if key in ("gw", "gw6"):
+            try:
+                ipaddress.ip_address(val)
+            except ValueError:
+                raise ValueError(f"Invalid gateway {val!r} in --ip {spec!r}.") from None
+        elif val.lower() not in ("dhcp", "auto", "manual"):
+            try:
+                ipaddress.ip_interface(val)
+            except ValueError:
+                raise ValueError(f"Invalid ip6 value {val!r} in --ip {spec!r}.") from None
+    return spec
+
+
 def build_ipconfig(spec: str) -> str:
-    """Turn a friendly --ip value into a Proxmox ipconfig string."""
-    return "ip=dhcp" if spec == "dhcp" else f"ip={spec}"
+    """Validate and turn a friendly --ip value into a Proxmox ipconfig string."""
+    validated = validate_ip_spec(spec)
+    return "ip=dhcp" if validated == "dhcp" else f"ip={validated}"
+
+
+_CHECKSUM_ALGOS = frozenset({"md5", "sha1", "sha224", "sha256", "sha384", "sha512"})
+
+
+def parse_checksum(value: str) -> tuple:
+    """Split ``<algo>:<hexdigest>`` for --checksum; raises ``ValueError`` on bad shape."""
+    algo, sep, digest = value.partition(":")
+    algo = algo.strip().lower()
+    if not sep or algo not in _CHECKSUM_ALGOS or not digest.strip():
+        raise ValueError(
+            f"--checksum must be <algo>:<hexdigest> with algo one of "
+            f"{', '.join(sorted(_CHECKSUM_ALGOS))} (got {value!r})."
+        )
+    return algo, digest.strip()
 
 
 def resolve_import_storage(client, node: str, explicit=None) -> str:
@@ -70,22 +161,98 @@ def resolve_import_storage(client, node: str, explicit=None) -> str:
     return candidates[0]["storage"]
 
 
+def resolve_disk_storage(client, node: str, explicit=None, *, content: str = "images") -> str:
+    """Pick a storage for guest disks (``images``) or a container rootfs (``rootdir``).
+
+    ``local-lvm`` is preferred when present (the Proxmox default), else the first
+    capable active storage alphabetically. An explicit choice is validated so a
+    typo fails fast instead of after a slow image download.
+    """
+    storages = client.list_storage(node)
+
+    def _contents(s) -> list:
+        return str(s.get("content", "")).split(",")
+
+    if explicit:
+        match = next((s for s in storages if s.get("storage") == explicit), None)
+        if match is None:
+            raise LookupError(f"Storage {explicit!r} not found on {node}.")
+        if content not in _contents(match):
+            raise RuntimeError(
+                f"Storage {explicit!r} on {node} does not support {content!r} content; "
+                f"pick one that does (see `pmox storage list`)."
+            )
+        return explicit
+    candidates = [
+        s for s in storages
+        if content in _contents(s) and s.get("active", 1) != 0 and s.get("enabled", 1) != 0
+    ]
+    if not candidates:
+        raise RuntimeError(
+            f"No active storage on {node} supports {content!r} content; pass --storage explicitly."
+        )
+    candidates.sort(key=lambda s: (s.get("storage") != "local-lvm", s.get("storage", "")))
+    return candidates[0]["storage"]
+
+
 def step(op: str, args: dict, *, await_task: bool = False, describe: str = "") -> dict:
     """Construct one plan step."""
     return {"op": op, "args": args, "await_task": await_task, "describe": describe}
+
+
+def _plan_error(exc, *, plan: list, index: int, node: str, started: bool) -> PlanError:
+    """Wrap a step failure with everything an agent needs to recover.
+
+    ``started`` is True when the step's API call succeeded but waiting on its task
+    failed — for a create step that means the guest may exist half-configured.
+    """
+    failed = plan[index]
+    label = failed["describe"] or failed["op"]
+    create_ops = ("create_guest", "clone_guest")
+    newid = next((s["args"].get("newid") for s in plan if s["args"].get("newid") is not None), None)
+    vmid = newid if newid is not None else next(
+        (s["args"].get("vmid") for s in plan if s["args"].get("vmid") is not None), None
+    )
+    kind = next((s["args"].get("kind") for s in plan if s["args"].get("kind")), "qemu")
+    cmd = "vm" if kind == "qemu" else "ct"
+    created = any(s["op"] in create_ops for s in plan[:index]) or (started and failed["op"] in create_ops)
+    extra = dict(getattr(exc, "extra", {}) or {})
+    extra.update({
+        "node": node,
+        "failed_step": label,
+        "completed_steps": [s["describe"] or s["op"] for s in plan[:index]],
+    })
+    if vmid is not None:
+        extra["vmid"] = vmid
+    if created and vmid is not None:
+        extra["hint"] = (
+            f"{cmd} {vmid} was created on {node} but provisioning stopped at {label!r}. "
+            f"Inspect with `pmox {cmd} describe {vmid}`; finish manually or delete it before "
+            f"retrying (a plain retry would create a second guest under a new VMID)."
+        )
+    else:
+        extra["hint"] = "No guest was created yet, so retrying the same command is safe."
+    return PlanError(f"Provisioning failed at {label!r}: {exc}", extra=extra)
 
 
 def execute_plan(client, node: str, plan: list, waiter) -> list:
     """Run each step against ``client``; wait on UPID-returning steps via ``waiter``.
 
     ``waiter`` is a callable ``(node, upid) -> None`` (the CLI supplies one that
-    polls task status with the configured timeout).
+    polls task status with the configured timeout). A step failure is re-raised
+    as :class:`PlanError` carrying the vmid, completed steps, and a recovery hint.
     """
     results = []
-    for s in plan:
-        result = getattr(client, s["op"])(**s["args"])
-        if s["await_task"]:
-            waiter(node, result)
+    for idx, s in enumerate(plan):
+        try:
+            result = getattr(client, s["op"])(**s["args"])
+        except Exception as exc:  # noqa: BLE001 - wrap with recovery context
+            raise _plan_error(exc, plan=plan, index=idx, node=node, started=False) from exc
+        try:
+            if s["await_task"]:
+                waiter(node, result)
+        except Exception as exc:  # noqa: BLE001 - the call succeeded; its task did not
+            raise _plan_error(exc, plan=plan, index=idx, node=node, started=True) from exc
         results.append(result)
     return results
 
@@ -146,6 +313,8 @@ def build_vm_image_plan(
     extra=None,
 ) -> list:
     """Build the ordered plan for an all-in-one cloud-init VM."""
+    if name:
+        validate_guest_name(name)
     volid, download = _resolve_image_volid(client, node, import_storage or storage, image)
     plan = []
     if download:
@@ -221,6 +390,8 @@ def build_vm_clone_plan(
     start=True,
 ) -> list:
     """Build the plan for cloning a template into a ready-to-SSH VM."""
+    if name:
+        validate_guest_name(name)
     clone_args = {"node": node, "kind": "qemu", "vmid": template_id, "newid": newid}
     if name:
         clone_args["name"] = name
@@ -249,14 +420,30 @@ def build_vm_clone_plan(
     return plan
 
 
+def match_appliance(names, template: str) -> Optional[str]:
+    """Best aplinfo filename for a template query: exact > ``<query>-standard``
+    prefix > substring. Among version candidates the lexicographically greatest
+    (newest) wins, so ``ubuntu-24.04`` resolves to the latest standard build."""
+    if template in names:
+        return template
+    standard = [n for n in names if n.startswith(f"{template}-standard")]
+    if standard:
+        return max(standard)
+    subs = [n for n in names if template in n]
+    return max(subs) if subs else None
+
+
 def _resolve_appliance(client, node, template_storage, template):
     """Return (ostemplate_volid, download_step_or_None) for a CT template name/volid."""
     if ":vztmpl/" in template:
         return template, None
-    matches = [a for a in client.list_appliances(node) if template in a.get("template", "")]
-    if not matches:
-        raise LookupError(f"No container template matching {template!r} available on {node}.")
-    filename = matches[0]["template"]
+    names = [a.get("template", "") for a in client.list_appliances(node)]
+    filename = match_appliance(names, template)
+    if not filename:
+        raise LookupError(
+            f"No container template matching {template!r} available on {node}. "
+            f"See `pmox image list --ct --node {node}`."
+        )
     volid = f"{template_storage}:vztmpl/{filename}"
     present = any(c.get("volid") == volid for c in client.storage_content(node, template_storage))
     if present:
@@ -288,6 +475,9 @@ def build_ct_plan(
     start=True,
 ) -> list:
     """Build the ordered plan for creating a ready-to-use LXC container."""
+    if hostname:
+        validate_guest_name(hostname)
+    ip = validate_ip_spec(ip)
     ostemplate, download = _resolve_appliance(client, node, template_storage, template)
     plan = []
     if download:

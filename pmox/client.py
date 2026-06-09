@@ -185,18 +185,20 @@ class ProxmoxClient:
         return self._api.nodes(node).tasks(upid).log.get(**params)
 
     # ---- helpers ----
-    def resolve_node(self, vmid) -> Optional[str]:
-        """Find which node a vmid lives on (via /cluster/resources)."""
+    def locate_guest(self, vmid) -> Optional[dict]:
+        """The /cluster/resources row for a vmid (carries node, type, name), or None."""
         target = int(vmid)
         for r in self.cluster_resources(type="vm"):
             if int(r.get("vmid", -1)) == target:
-                return r.get("node")
+                return r
         return None
+
+    def resolve_node(self, vmid) -> Optional[str]:
+        """Find which node a vmid lives on (via /cluster/resources)."""
+        row = self.locate_guest(vmid)
+        return row.get("node") if row else None
 
     def guest_kind(self, vmid) -> Optional[str]:
         """Return 'qemu' or 'lxc' for a vmid, or None if not found."""
-        target = int(vmid)
-        for r in self.cluster_resources(type="vm"):
-            if int(r.get("vmid", -1)) == target:
-                return r.get("type")
-        return None
+        row = self.locate_guest(vmid)
+        return row.get("type") if row else None

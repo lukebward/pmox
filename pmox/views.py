@@ -14,11 +14,43 @@ from .catalog import CPU_PRESSURE, MEM_PRESSURE, STORAGE_PRESSURE
 _RECENT_TASK_LIMIT = 50
 
 
+def guest_not_found(vmid) -> LookupError:
+    """The standard, actionable error for a vmid that isn't in /cluster/resources."""
+    return LookupError(
+        f"Guest {vmid} not found in the cluster. Check `pmox vm list` / `pmox ct list`; "
+        f"if it was created moments ago, retry shortly — or pass --node explicitly."
+    )
+
+
+def locate_guest_checked(client, kind: str, vmid) -> Optional[dict]:
+    """Cluster-resources row for ``vmid`` (or None), validated against ``kind``.
+
+    Raises ``LookupError`` with the corrective command when the guest exists but
+    is the other kind (e.g. ``pmox vm status`` against an LXC container) — the
+    raw API error would otherwise be a misleading 500 about a missing config file.
+    """
+    row = client.locate_guest(vmid)
+    if row is None:
+        return None
+    actual = row.get("type")
+    if kind and actual and actual != kind:
+        right = "ct" if actual == "lxc" else "vm"
+        wrong = "vm" if kind == "qemu" else "ct"
+        what = "an LXC container" if actual == "lxc" else "a QEMU VM"
+        name = f" ({row['name']})" if row.get("name") else ""
+        raise LookupError(
+            f"Guest {vmid}{name} is {what} — use `pmox {right} ...` instead of `pmox {wrong} ...`."
+        )
+    return row
+
+
 def describe_guest(client, kind: str, vmid: int, node: Optional[str] = None) -> dict:
     """Consolidate a guest's status, config, owning node, snapshots and recent tasks."""
-    node = node or client.resolve_node(vmid)
-    if not node:
-        raise LookupError(f"Could not locate guest {vmid} in the cluster.")
+    if node is None:
+        row = locate_guest_checked(client, kind, vmid)
+        if row is None or not row.get("node"):
+            raise guest_not_found(vmid)
+        node = row["node"]
     tasks = [
         t
         for t in client.list_tasks(node, limit=_RECENT_TASK_LIMIT)
@@ -50,15 +82,6 @@ def _addr_scope(family: str, address: str) -> str:
     if addr.startswith("fe80"):
         return "link"
     return "global"
-
-
-def _locate_guest(client, vmid):
-    """Cluster-resource row for a vmid (carries node + name), or None."""
-    target = int(vmid)
-    for r in client.cluster_resources(type="vm"):
-        if int(r.get("vmid", -1)) == target:
-            return r
-    return None
 
 
 def _parse_qemu_interfaces(payload) -> list:
@@ -152,10 +175,10 @@ def guest_ip_addresses(client, kind: str, vmid: int, node: Optional[str] = None)
     (``source: "config"``). Raises ``LookupError`` if the guest can't be located,
     or ``RuntimeError`` with an actionable message if neither source yields data.
     """
-    row = _locate_guest(client, vmid)
+    row = locate_guest_checked(client, kind, vmid)
     node = node or (row.get("node") if row else None)
     if not node:
-        raise LookupError(f"Could not locate guest {vmid} in the cluster.")
+        raise guest_not_found(vmid)
     name = row.get("name") if row else None
 
     if kind == "qemu":

@@ -46,3 +46,16 @@ path to the repo root, where `.claude-plugin/marketplace.json` lives.)
 
 The plugin never bypasses pmox's safety gates: Claude only adds `--dangerous`
 (and `--yes` for destructive actions) when you explicitly ask it to.
+
+## Permission model — read before installing
+
+The skill pre-approves `Bash(pmox:*)` and `Bash(python -m pmox:*)` (and nothing
+else), so pmox commands run without per-call permission prompts. Note what that
+means: **the prefix match cannot see flags**, so a `pmox --dangerous vm delete
+100 --yes` is auto-approved at the Claude Code layer too — once installed, the
+protection against unwanted changes is pmox's own gates plus the skill's rules
+(Claude adds `--dangerous`/`--yes` only when you explicitly ask). Because
+pmox's global flags are position-independent, a `deny: Bash(pmox --dangerous:*)`
+rule would not be reliable either. If you want a hard prompt on every mutation,
+remove the `allowed-tools` lines from the skill and command files after
+installing — you'll then be asked before each pmox invocation instead.

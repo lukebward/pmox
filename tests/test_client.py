@@ -136,6 +136,16 @@ def test_tasks(client, api):
     api.nodes.return_value.tasks.assert_called_with("UPID:x")
 
 
+def test_locate_guest_returns_row(client, api):
+    api.cluster.resources.get.return_value = [
+        {"vmid": 100, "node": "pve3", "type": "qemu"},
+        {"vmid": 200, "node": "pve1", "type": "lxc"},
+    ]
+    assert client.locate_guest(200) == {"vmid": 200, "node": "pve1", "type": "lxc"}
+    assert client.locate_guest("100")["node"] == "pve3"
+    assert client.locate_guest(999) is None
+
+
 def test_resolve_node_and_kind(client, api):
     api.cluster.resources.get.return_value = [
         {"vmid": 100, "node": "pve3", "type": "qemu"},

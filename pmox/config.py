@@ -112,7 +112,10 @@ def _load_config_file(path: Path) -> dict:
     if tomllib is None:  # pragma: no cover
         raise ConfigError("tomllib is unavailable on this Python; cannot read a config file.")
     with path.open("rb") as handle:
-        data = tomllib.load(handle)
+        try:
+            data = tomllib.load(handle)
+        except tomllib.TOMLDecodeError as exc:
+            raise ConfigError(f"Invalid TOML in {path}: {exc}") from exc
     return data
 
 
