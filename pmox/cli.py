@@ -701,6 +701,16 @@ def nodes_status(ctx: typer.Context, node: str = typer.Argument(..., help="Node 
         emit(client.node_status(node), json_output=ctx.obj.json, title=f"Node {node}")
 
 
+def _warn_ignored_with_template(flags) -> None:
+    """Warn (stderr) about options that --from-template silently discards."""
+    ignored = [flag for flag, given in flags if given]
+    if ignored:
+        err_console.print(
+            f"[yellow]Warning:[/yellow] --from-template ignores: {', '.join(ignored)} "
+            f"(the clone inherits the template's hardware)."
+        )
+
+
 # ---- guest (vm / ct) app factory ----
 def _make_power_command(group, kind, label, action, destructive, description):
     @group.command(action, help=f"{description} a {label}.")
@@ -844,6 +854,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
     ):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
+            provision.validate_guest_name(newname)
             resolved = node or _resolve_node_or_die(client, kind, vmid)
             key = "name" if kind == "qemu" else "hostname"
             _execute(
@@ -923,19 +934,19 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
         def _new(
             ctx: typer.Context,
             name: Optional[str] = typer.Argument(None, help="VM name (optional)."),
-            size: str = typer.Option("small", "--size", help="Sizing profile: small | medium | large."),
+            size: Optional[str] = typer.Option(None, "--size", help="Sizing profile: small | medium | large (default small; ignored with --from-template)."),
             disk: Optional[int] = typer.Option(None, "--disk", help="Disk size in GiB."),
-            storage: str = typer.Option("local-lvm", "--storage", help="Storage for the disk/cloud-init."),
+            storage: Optional[str] = typer.Option(None, "--storage", help="Storage for the disk/cloud-init (default: auto-detect; local-lvm preferred)."),
             import_storage: Optional[str] = typer.Option(None, "--import-storage", help="Storage to hold the imported image (default: auto-detect one with 'import' content)."),
             node: Optional[str] = typer.Option(None, "--node", "-n", help="Node (auto-picked if one node)."),
             vmid: Optional[int] = typer.Option(None, "--vmid", help="VMID (auto-assigned if omitted)."),
             option: Optional[List[str]] = typer.Option(None, "--option", "-o", help="Extra create param key=value."),
             image: Optional[str] = typer.Option(None, "--image", help="Cloud image (catalog name, https URL, or volid). Enables cloud-init mode."),
             from_template: Optional[int] = typer.Option(None, "--from-template", help="Clone an existing template VMID into a cloud-init VM. Cloud-init mode."),
-            ssh_key: Optional[List[str]] = typer.Option(None, "--ssh-key", help="Path to an SSH public key file (repeatable). Cloud-init mode."),
+            ssh_key: Optional[List[str]] = typer.Option(None, "--ssh-key", help="Path to an SSH public key file (repeatable; ~ is expanded). Cloud-init mode."),
             ip: Optional[str] = typer.Option(None, "--ip", help="dhcp or <cidr>,gw=<ip>. Cloud-init mode."),
             ciuser: Optional[str] = typer.Option(None, "--ciuser", help="Cloud-init user. Cloud-init mode."),
-            cipassword: Optional[str] = typer.Option(None, "--cipassword", help="Cloud-init password. Cloud-init mode."),
+            cipassword: Optional[str] = typer.Option(None, "--cipassword", help="Cloud-init password (visible in process listings — prefer SSH keys). Cloud-init mode."),
             nameserver: Optional[str] = typer.Option(None, "--nameserver", help="Cloud-init DNS server(s). Cloud-init mode."),
         ):
             with error_boundary(ctx.obj.json):
@@ -945,8 +956,14 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 target_vmid = vmid if vmid is not None else int(client.cluster_nextid())
 
                 if from_template is not None:
+                    _warn_ignored_with_template([
+                        ("--size", size is not None),
+                        ("--storage", storage is not None),
+                        ("--import-storage", import_storage is not None),
+                        ("-o/--option", bool(option)),
+                    ])
                     target_node = node or _resolve_node_or_die(client, "qemu", from_template)
-                    sshkeys = "\n".join(Path(p).read_text().strip() for p in (ssh_key or [])) or None
+                    sshkeys = provision.read_ssh_keys(ssh_key)
                     plan = provision.build_vm_clone_plan(
                         client,
                         node=target_node,
@@ -973,10 +990,11 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                     return
 
                 target_node = node or _single_node_or_die(client)
-                profile = catalog.size_params(size)
+                profile = catalog.size_params(size or "small")
 
                 if image:
-                    sshkeys = "\n".join(Path(p).read_text().strip() for p in (ssh_key or [])) or None
+                    sshkeys = provision.read_ssh_keys(ssh_key)
+                    resolved_storage = provision.resolve_disk_storage(client, target_node, storage)
                     needs_import = catalog.resolve_image(image)["kind"] != "volid"
                     resolved_import = (
                         provision.resolve_import_storage(client, target_node, import_storage)
@@ -990,7 +1008,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                         cores=profile["cores"],
                         memory=profile["memory"],
                         disk=disk,
-                        storage=storage,
+                        storage=resolved_storage,
                         import_storage=resolved_import,
                         image=image,
                         sshkeys=sshkeys,
@@ -1013,12 +1031,15 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                     return
 
                 # blank shell (B2 behavior)
+                if name:
+                    provision.validate_guest_name(name)
                 params = dict(profile)
                 params.update({"scsihw": "virtio-scsi-single", "net0": "virtio,bridge=vmbr0", "ostype": "l26"})
                 if name:
                     params["name"] = name
                 if disk:
-                    params["scsi0"] = f"{storage}:{disk},iothread=1"
+                    resolved_storage = provision.resolve_disk_storage(client, target_node, storage)
+                    params["scsi0"] = f"{resolved_storage}:{disk},iothread=1"
                     params["boot"] = "order=scsi0"
                 params.update(parse_options(option))
                 _execute(
@@ -1031,19 +1052,19 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                     vmid=target_vmid,
                 )
 
-        @group.command("up", help="Create a ready-to-SSH VM with an auto-allocated static IP (seamless, token-only).")
+        @group.command("up", help="Create a ready-to-SSH VM in one call (DHCP by default; pool/--ip for a static address).")
         def _up(
             ctx: typer.Context,
             name: str = typer.Argument(..., help="VM name."),
             image: Optional[str] = typer.Option(None, "--image", help="Cloud image: catalog name, https URL, or import volid."),
             from_template: Optional[int] = typer.Option(None, "--from-template", help="Clone an existing template VMID instead of importing an image."),
-            size: str = typer.Option("small", "--size", help="Sizing profile: small | medium | large (ignored with --from-template)."),
+            size: Optional[str] = typer.Option(None, "--size", help="Sizing profile: small | medium | large (default small; ignored with --from-template)."),
             disk: Optional[int] = typer.Option(None, "--disk", help="Disk size in GiB."),
             node: Optional[str] = typer.Option(None, "--node", "-n", help="Node (auto-picked if one node)."),
-            storage: str = typer.Option("local-lvm", "--storage", help="Storage for the disk/cloud-init."),
+            storage: Optional[str] = typer.Option(None, "--storage", help="Storage for the disk/cloud-init (default: auto-detect; local-lvm preferred)."),
             import_storage: Optional[str] = typer.Option(None, "--import-storage", help="Storage to hold the imported image (default: auto-detect)."),
-            ip: Optional[str] = typer.Option(None, "--ip", help="Static <cidr>,gw=<ip> to use instead of auto-allocating."),
-            ssh_key: Optional[str] = typer.Option(None, "--ssh-key", help="SSH public key path (default ~/.ssh/id_ed25519.pub; generated if missing)."),
+            ip: Optional[str] = typer.Option(None, "--ip", help="dhcp, or <cidr>,gw=<ip> for a static address (default: [network] pool allocation if configured, else DHCP)."),
+            ssh_key: Optional[List[str]] = typer.Option(None, "--ssh-key", help="SSH public key path (repeatable; ~ is expanded; default ~/.ssh/id_ed25519.pub, generated if missing)."),
             no_ssh_key: bool = typer.Option(False, "--no-ssh-key", help="Don't attach or generate an SSH key."),
             ciuser: Optional[str] = typer.Option(None, "--ciuser", help="Cloud-init user (default from config)."),
             vmid: Optional[int] = typer.Option(None, "--vmid", help="VMID (auto-assigned if omitted)."),
@@ -1054,36 +1075,45 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 if (image is None) == (from_template is None):
                     raise ValueError("vm up needs exactly one of --image or --from-template.")
                 target_vmid = vmid if vmid is not None else int(client.cluster_nextid())
-                profile = catalog.size_params(size)
+                profile = catalog.size_params(size or "small")
 
                 if from_template is not None:
+                    _warn_ignored_with_template([
+                        ("--size", size is not None),
+                        ("--storage", storage is not None),
+                        ("--import-storage", import_storage is not None),
+                    ])
                     target_node = node or _resolve_node_or_die(client, "qemu", from_template)
+                    resolved_storage = None
                     resolved_import = None
                 else:
                     target_node = node or _single_node_or_die(client)
+                    resolved_storage = provision.resolve_disk_storage(client, target_node, storage)
                     needs_import = catalog.resolve_image(image)["kind"] != "volid"
                     resolved_import = (
                         provision.resolve_import_storage(client, target_node, import_storage or settings.default_import_storage)
                         if needs_import else None
                     )
 
-                if ip:
+                if ip and ip.strip().lower() != "dhcp":
                     ipconfig = provision.build_ipconfig(ip)
                     chosen_ip = ip.split(",", 1)[0].split("/", 1)[0]
-                elif settings.net_cidr and settings.net_gateway and settings.net_pool:
+                elif ip is None and settings.net_cidr and settings.net_gateway and settings.net_pool:
                     allocated = ipam.allocate_ip(
                         client, cidr=settings.net_cidr, gateway=settings.net_gateway, pool=settings.net_pool
                     )
                     ipconfig = f"ip={allocated},gw={settings.net_gateway}"
                     chosen_ip = allocated.split("/", 1)[0]
                 else:
-                    # zero-config default: let the VM DHCP. Set a [network] pool (or --ip) for a known static IP.
+                    # zero-config default (or explicit --ip dhcp): let the VM DHCP.
                     ipconfig = provision.build_ipconfig("dhcp")
                     chosen_ip = None
 
-                key_path = None
+                key_paths: List[str] = []
                 if not no_ssh_key:
-                    key_path = ssh_key or settings.default_ssh_key or str(Path.home() / ".ssh" / "id_ed25519.pub")
+                    key_paths = list(ssh_key or []) or [
+                        settings.default_ssh_key or str(Path.home() / ".ssh" / "id_ed25519.pub")
+                    ]
                 chosen_ciuser = ciuser or settings.default_ciuser
 
                 def _build(sshkeys):
@@ -1097,21 +1127,22 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                     return provision.build_vm_image_plan(
                         client, node=target_node, vmid=target_vmid, name=name,
                         cores=profile["cores"], memory=profile["memory"], disk=disk,
-                        storage=storage, import_storage=resolved_import, image=image,
+                        storage=resolved_storage, import_storage=resolved_import, image=image,
                         sshkeys=sshkeys, ipconfig=ipconfig, ciuser=chosen_ciuser,
                         cipassword=None, nameserver=settings.net_nameserver, start=True,
                     )
 
                 if ctx.obj.dry_run:
-                    # dry-run must be side-effect-free: read an existing key, never generate one
-                    existing = None
-                    if key_path and Path(key_path).expanduser().exists():
-                        existing = Path(key_path).expanduser().read_text().strip()
-                    print(json.dumps({"dry_run": True, "op": "qemu.up", "node": target_node, "plan": _build(existing)}, default=str, indent=2))
+                    # dry-run must be side-effect-free: read existing keys, never generate one
+                    existing = "\n".join(
+                        Path(p).expanduser().read_text().strip()
+                        for p in key_paths if Path(p).expanduser().exists()
+                    ) or None
+                    print(json.dumps({"dry_run": True, "op": "qemu.up", "node": target_node, "vmid": target_vmid, "plan": _build(existing)}, default=str, indent=2))
                     return
 
                 require_dangerous(ctx.obj.dangerous)
-                sshkeys = provision.ensure_ssh_key(key_path) if key_path else None
+                sshkeys = "\n".join(provision.ensure_ssh_key(p) for p in key_paths) or None
                 provision.execute_plan(client, target_node, _build(sshkeys), waiter=lambda n, upid: _maybe_wait(ctx, n, upid))
 
                 ssh_val = f"ssh {chosen_ciuser}@{chosen_ip}" if (chosen_ip and chosen_ciuser) else None
@@ -1147,27 +1178,28 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
             template: str = typer.Option(..., "--template", help="Template: catalog/aplinfo name or a vztmpl volid."),
             size: str = typer.Option("small", "--size", help="Sizing profile: small | medium | large."),
             disk: int = typer.Option(8, "--disk", help="Root filesystem size in GiB."),
-            storage: str = typer.Option("local-lvm", "--storage", help="Storage for the rootfs."),
+            storage: Optional[str] = typer.Option(None, "--storage", help="Storage for the rootfs (default: auto-detect; local-lvm preferred)."),
             template_storage: str = typer.Option("local", "--template-storage", help="Storage to download the template into (vztmpl)."),
             node: Optional[str] = typer.Option(None, "--node", "-n", help="Node (auto-picked if one node)."),
             vmid: Optional[int] = typer.Option(None, "--vmid", help="VMID (auto-assigned if omitted)."),
-            ssh_key: Optional[List[str]] = typer.Option(None, "--ssh-key", help="Path to an SSH public key file (repeatable)."),
+            ssh_key: Optional[List[str]] = typer.Option(None, "--ssh-key", help="Path to an SSH public key file (repeatable; ~ is expanded)."),
             ip: str = typer.Option("dhcp", "--ip", help="dhcp or <cidr>,gw=<ip>."),
-            password: Optional[str] = typer.Option(None, "--password", help="Root password."),
+            password: Optional[str] = typer.Option(None, "--password", help="Root password (visible in process listings — prefer SSH keys)."),
         ):
             with error_boundary(ctx.obj.json):
                 client = _get_client(ctx)
                 target_node = node or _single_node_or_die(client)
                 target_vmid = vmid if vmid is not None else int(client.cluster_nextid())
                 profile = catalog.size_params(size)
-                sshkeys = "\n".join(Path(p).read_text().strip() for p in (ssh_key or [])) or None
+                sshkeys = provision.read_ssh_keys(ssh_key)
+                resolved_storage = provision.resolve_disk_storage(client, target_node, storage, content="rootdir")
                 plan = provision.build_ct_plan(
                     client,
                     node=target_node,
                     vmid=target_vmid,
                     hostname=name,
                     template=template,
-                    storage=storage,
+                    storage=resolved_storage,
                     template_storage=template_storage,
                     disk=disk,
                     cores=profile["cores"],
@@ -1526,6 +1558,7 @@ def image_pull(
     vmid: Optional[int] = typer.Option(None, "--vmid", help="VMID for the template (auto-assigned if omitted). Used with --as-template."),
     name: Optional[str] = typer.Option(None, "--name", help="Name for the template. Used with --as-template."),
     ct: bool = typer.Option(False, "--ct", help="Pull an LXC container template via aplinfo instead of a VM cloud image."),
+    checksum: Optional[str] = typer.Option(None, "--checksum", help="Verify the download: <algo>:<hexdigest> (e.g. sha256:...). Plain image pulls only."),
 ):
     """Download a VM cloud image (or, with --ct, an LXC container template) to a storage; with --as-template, build a reusable golden VM template. Needs --dangerous."""
     with error_boundary(ctx.obj.json):
@@ -1533,12 +1566,21 @@ def image_pull(
 
         if ct and as_template:
             raise ValueError("--ct and --as-template are mutually exclusive.")
+        if checksum and (ct or as_template):
+            raise ValueError(
+                "--checksum only applies to a plain image pull. Pull with --checksum first; "
+                "the verified image is then reused by --as-template or vm new (downloads are cached)."
+            )
+        ck_algo, ck_digest = provision.parse_checksum(checksum) if checksum else (None, None)
 
         if ct:
-            matches = [a for a in client.list_appliances(node) if image in a.get("template", "")]
-            if not matches:
-                raise ValueError(f"No container template matching {image!r} on {node}.")
-            filename = matches[0]["template"]
+            names = [a.get("template", "") for a in client.list_appliances(node)]
+            filename = provision.match_appliance(names, image)
+            if not filename:
+                raise ValueError(
+                    f"No container template matching {image!r} on {node}. "
+                    f"See `pmox image list --ct --node {node}`."
+                )
             volid = f"{storage}:vztmpl/{filename}"
             if ctx.obj.dry_run:
                 print(json.dumps({"dry_run": True, "op": "image.pull.ct", "node": node, "params": {"volid": volid, "template": filename}}, default=str, indent=2))
@@ -1580,7 +1622,7 @@ def image_pull(
             return
         upid = client.download_url(
             node, storage, url=spec["url"], content="import", filename=spec["filename"],
-            checksum=spec["checksum"], checksum_algorithm=spec["algo"],
+            checksum=ck_digest or spec["checksum"], checksum_algorithm=ck_algo or spec["algo"],
         )
         _maybe_wait(ctx, node, upid)
         _ok(ctx, f"Pulled {image} → {volid}", op="image.pull", node=node, volid=volid, upid=upid)

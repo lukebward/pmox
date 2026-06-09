@@ -1084,6 +1084,7 @@ def test_vm_new_auto_node_multiple_errors(fake_client, creds):
 
 
 def test_vm_new_with_disk(fake_client, creds):
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
     r = inv(["--dangerous", "vm", "new", "--node", "pve1", "--vmid", "150", "--disk", "50"], creds)
     assert r.exit_code == 0, r.output
     kwargs = fake_client.create_guest.call_args.kwargs
@@ -1122,6 +1123,7 @@ def test_ct_new_creates_container(fake_client, creds, tmp_path, monkeypatch):
     key = tmp_path / "id.pub"
     key.write_text("ssh-ed25519 AAAA user@host")
     fake_client.list_appliances.return_value = [{"template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"}]
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
     fake_client.storage_content.return_value = []
     fake_client.download_appliance.return_value = "UPID:apl"
     fake_client.create_guest.return_value = "UPID:create"
@@ -1139,6 +1141,7 @@ def test_ct_new_creates_container(fake_client, creds, tmp_path, monkeypatch):
 
 def test_ct_new_dry_run(fake_client, creds):
     fake_client.list_appliances.return_value = [{"template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"}]
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
     fake_client.storage_content.return_value = []
     r = inv(["--dry-run", "ct", "new", "box", "--template", "ubuntu-24.04", "--node", "pve1", "--vmid", "300"], creds)
     assert r.exit_code == 0, r.output
@@ -1150,6 +1153,7 @@ def test_ct_new_dry_run(fake_client, creds):
 
 def test_ct_new_needs_dangerous(fake_client, creds):
     fake_client.list_appliances.return_value = [{"template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"}]
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
     fake_client.storage_content.return_value = []
     r = inv(["ct", "new", "box", "--template", "ubuntu-24.04", "--node", "pve1", "--vmid", "300"], creds)
     assert r.exit_code == 4, r.output
@@ -2109,6 +2113,264 @@ def test_json_mode_from_argv_flag_beats_env(monkeypatch):
 def test_json_mode_from_argv_ignores_after_double_dash(monkeypatch):
     monkeypatch.setenv("PMOX_JSON", "0")
     assert cli._json_mode_from_argv(["vm", "list", "--", "--json"]) is False
+
+
+# ------------------------------------------------- provisioning ergonomics --
+
+
+def test_vm_up_ip_dhcp_reports_null_ip(fake_client, creds, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("ssh-ed25519 AAAA u@h")
+    fake_client.cluster_nextid.return_value = "150"
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.storage_content.return_value = []
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    # pool IS configured, but an explicit --ip dhcp must win and skip allocation
+    r = inv(["--json", "--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+             "--ip", "dhcp", "--ssh-key", str(key)], _net_creds(creds))
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.output)
+    assert out["ip"] is None  # NOT the string "dhcp"
+    assert out["ssh"] is None
+    fake_client.cluster_resources.assert_not_called()
+    assert fake_client.create_guest.call_args.kwargs["ipconfig0"] == "ip=dhcp"
+
+
+def test_vm_new_ssh_key_tilde_expanded(fake_client, creds, tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "k.pub").write_text("ssh-ed25519 TILDE u@h\n")
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.storage_content.return_value = []
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.download_url.return_value = "UPID:dl"
+    fake_client.create_guest.return_value = "UPID:create"
+    fake_client.guest_power.return_value = "UPID:start"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--dangerous", "vm", "new", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+             "--vmid", "150", "--ssh-key", "~/.ssh/k.pub"], creds)
+    assert r.exit_code == 0, r.output
+    assert "TILDE" in fake_client.create_guest.call_args.kwargs["sshkeys"]
+
+
+def test_ct_new_ssh_key_tilde_expanded(fake_client, creds, tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "k.pub").write_text("ssh-ed25519 CTTILDE u@h\n")
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.list_appliances.return_value = [{"template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"}]
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.storage_content.return_value = []
+    fake_client.download_appliance.return_value = "UPID:apl"
+    fake_client.create_guest.return_value = "UPID:create"
+    fake_client.guest_power.return_value = "UPID:start"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--dangerous", "ct", "new", "box", "--template", "ubuntu-24.04", "--node", "pve1",
+             "--vmid", "300", "--ssh-key", "~/.ssh/k.pub"], creds)
+    assert r.exit_code == 0, r.output
+    assert fake_client.create_guest.call_args.kwargs["ssh-public-keys"] == "ssh-ed25519 CTTILDE u@h"
+
+
+def test_vm_new_ssh_key_missing_is_actionable(fake_client, creds, tmp_path):
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
+    r = inv(["--json", "--dangerous", "vm", "new", "web", "--from-template", "9000", "--vmid", "120",
+             "--ssh-key", str(tmp_path / "nope.pub")], creds)
+    assert r.exit_code == 1, r.output
+    assert "SSH public key not found" in json.loads(r.output)["message"]
+    fake_client.clone_guest.assert_not_called()
+
+
+def test_vm_up_multiple_ssh_keys(fake_client, creds, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    a = tmp_path / "a.pub"
+    a.write_text("keyA u@h\n")
+    b = tmp_path / "b.pub"
+    b.write_text("keyB u@h\n")
+    fake_client.cluster_nextid.return_value = "150"
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.storage_content.return_value = []
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+             "--ssh-key", str(a), "--ssh-key", str(b)], creds)
+    assert r.exit_code == 0, r.output
+    sshkeys = fake_client.create_guest.call_args.kwargs["sshkeys"]
+    assert "keyA" in sshkeys and "keyB" in sshkeys
+
+
+def test_vm_new_invalid_name_fails_fast(fake_client, creds):
+    fake_client.storage_content.return_value = []
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    r = inv(["--json", "--dangerous", "vm", "new", "web_01", "--image", "ubuntu-24.04",
+             "--node", "pve1", "--vmid", "150"], creds)
+    assert r.exit_code == 1, r.output
+    assert "Invalid guest name" in json.loads(r.output)["message"]
+    fake_client.download_url.assert_not_called()
+    fake_client.create_guest.assert_not_called()
+
+
+def test_vm_new_blank_invalid_name_fails_fast(fake_client, creds):
+    r = inv(["--json", "--dangerous", "vm", "new", "web_01", "--node", "pve1", "--vmid", "150"], creds)
+    assert r.exit_code == 1, r.output
+    assert "Invalid guest name" in json.loads(r.output)["message"]
+    fake_client.create_guest.assert_not_called()
+
+
+def test_rename_invalid_name_fails_fast(fake_client, creds):
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
+    r = inv(["--json", "--dangerous", "vm", "rename", "100", "bad_name"], creds)
+    assert r.exit_code == 1, r.output
+    assert "Invalid guest name" in json.loads(r.output)["message"]
+    fake_client.update_config.assert_not_called()
+
+
+def test_vm_new_invalid_ip_fails_fast(fake_client, creds):
+    fake_client.storage_content.return_value = []
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    r = inv(["--json", "--dangerous", "vm", "new", "web", "--image", "ubuntu-24.04",
+             "--node", "pve1", "--vmid", "150", "--ip", "10.0.0.5"], creds)
+    assert r.exit_code == 1, r.output
+    assert "Invalid --ip" in json.loads(r.output)["message"]
+    fake_client.download_url.assert_not_called()
+
+
+def test_ct_new_invalid_ip_fails_fast(fake_client, creds):
+    fake_client.list_appliances.return_value = [{"template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"}]
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.storage_content.return_value = []
+    r = inv(["--json", "--dangerous", "ct", "new", "box", "--template", "ubuntu-24.04",
+             "--node", "pve1", "--vmid", "300", "--ip", "banana"], creds)
+    assert r.exit_code == 1, r.output
+    assert "Invalid" in json.loads(r.output)["message"]
+    fake_client.create_guest.assert_not_called()
+
+
+def test_vm_new_storage_auto_detects_when_no_local_lvm(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.list_storage.return_value = [
+        {"storage": "local", "content": "import,iso", "plugintype": "dir"},
+        {"storage": "tank", "content": "images,rootdir", "plugintype": "zfspool"},
+    ]
+    fake_client.storage_content.return_value = []
+    fake_client.download_url.return_value = "UPID:dl"
+    fake_client.create_guest.return_value = "UPID:create"
+    fake_client.guest_power.return_value = "UPID:start"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--dangerous", "vm", "new", "web", "--image", "ubuntu-24.04", "--node", "pve1", "--vmid", "150"], creds)
+    assert r.exit_code == 0, r.output
+    assert fake_client.create_guest.call_args.kwargs["ide2"] == "tank:cloudinit"
+
+
+def test_vm_new_explicit_storage_validated_fails_fast(fake_client, creds):
+    fake_client.list_storage.return_value = _IMPORT_STORAGES  # 'local' lacks the images content type
+    fake_client.storage_content.return_value = []
+    r = inv(["--json", "--dangerous", "vm", "new", "web", "--image", "ubuntu-24.04",
+             "--node", "pve1", "--vmid", "150", "--storage", "local"], creds)
+    assert r.exit_code == 1, r.output
+    assert "images" in json.loads(r.output)["message"]
+    fake_client.download_url.assert_not_called()
+    fake_client.create_guest.assert_not_called()
+
+
+def test_vm_new_from_template_warns_on_ignored_options(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
+    fake_client.clone_guest.return_value = "UPID:clone"
+    fake_client.guest_power.return_value = "UPID:start"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--no-json", "--dangerous", "vm", "new", "web", "--from-template", "9000", "--vmid", "120",
+             "--size", "large", "--storage", "tank", "-o", "cores=8"], creds)
+    assert r.exit_code == 0, r.output
+    out = plain(r.output)
+    assert "ignores" in out
+    assert "--size" in out and "--storage" in out and "-o" in out
+
+
+def test_vm_up_from_template_warns_on_ignored_storage(fake_client, creds, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("k u@h")
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
+    fake_client.cluster_nextid.return_value = "150"
+    fake_client.clone_guest.return_value = "UPID:clone"
+    fake_client.update_config.return_value = None
+    fake_client.guest_power.return_value = "UPID:start"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--no-json", "--dangerous", "vm", "up", "web", "--from-template", "9000",
+             "--storage", "tank", "--ssh-key", str(key)], creds)
+    assert r.exit_code == 0, r.output
+    assert "ignores" in plain(r.output)
+
+
+def test_image_pull_ct_uses_best_match(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.list_appliances.return_value = [
+        {"template": "ubuntu-24.04-standard_24.04-1_amd64.tar.zst"},
+        {"template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"},
+    ]
+    fake_client.storage_content.return_value = []
+    fake_client.download_appliance.return_value = "UPID:apl"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--dangerous", "image", "pull", "ubuntu-24.04", "--ct", "--storage", "local", "--node", "pve1"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.download_appliance.assert_called_once_with(
+        "pve1", "local", "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
+    )
+
+
+def test_image_pull_with_checksum_overrides_catalog(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.storage_content.return_value = []
+    fake_client.download_url.return_value = "UPID:dl"
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--dangerous", "image", "pull", "ubuntu-24.04", "--storage", "local", "--node", "pve1",
+             "--checksum", "sha256:abc123"], creds)
+    assert r.exit_code == 0, r.output
+    kwargs = fake_client.download_url.call_args.kwargs
+    assert kwargs["checksum"] == "abc123"
+    assert kwargs["checksum_algorithm"] == "sha256"
+
+
+def test_image_pull_checksum_bad_format_errors(fake_client, creds):
+    r = inv(["--json", "--dangerous", "image", "pull", "ubuntu-24.04", "--storage", "local",
+             "--node", "pve1", "--checksum", "nohex"], creds)
+    assert r.exit_code == 1, r.output
+    assert "--checksum" in json.loads(r.output)["message"]
+    fake_client.download_url.assert_not_called()
+
+
+def test_image_pull_checksum_excluded_with_ct_and_template(fake_client, creds):
+    r = inv(["--json", "--dangerous", "image", "pull", "ubuntu-24.04", "--ct", "--storage", "local",
+             "--node", "pve1", "--checksum", "sha256:abc"], creds)
+    assert r.exit_code == 1, r.output
+    r2 = inv(["--json", "--dangerous", "image", "pull", "ubuntu-24.04", "--as-template", "--storage", "local",
+              "--node", "pve1", "--checksum", "sha256:abc"], creds)
+    assert r2.exit_code == 1, r2.output
+
+
+def test_vm_up_plan_failure_envelope_has_recovery_context(fake_client, creds, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("k u@h")
+    fake_client.cluster_nextid.return_value = "150"
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.storage_content.return_value = []
+    fake_client.download_url.return_value = "UPID:dl"
+    fake_client.create_guest.return_value = "UPID:create"
+    fake_client.guest_power.side_effect = RuntimeError("start exploded")
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--json", "--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+             "--ssh-key", str(key)], creds)
+    assert r.exit_code == 1, r.output
+    payload = json.loads(r.output)
+    assert payload["vmid"] == 150
+    assert payload["failed_step"] == "start"
+    assert "completed_steps" in payload
+    assert "pmox vm describe 150" in payload["hint"]
 
 
 # ------------------------------------- guest resolution & kind mismatch --
