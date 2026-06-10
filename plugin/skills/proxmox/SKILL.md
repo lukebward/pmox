@@ -163,16 +163,18 @@ pmox cluster resources                   # cluster-wide resource view
 pmox cluster resources --type vm         # filter: vm | node | storage | sdn | pool
 pmox vm describe <vmid>                  # consolidated: status + config + snapshots + tasks
 pmox ct describe <vmid>                  # same for containers
-pmox vm ip <vmid> [--wait]               # live IP(s); --wait polls until one appears
+pmox vm ip <vmid> [--wait]               # live IP(s): agent, static config, or same-LAN ARP scan
 pmox ct ip <vmid>                        # (--all adds loopback, link-local, MACs)
 pmox image list                          # VM cloud image catalog
 pmox image list --ct                     # LXC container templates (node auto-picked)
 ```
 
-> `vm ip` reads the live address from the QEMU guest agent, so the guest needs
-> `qemu-guest-agent` running and `agent: 1` set (cloud-init VMs from `vm new`
-> already enable `agent: 1`). `ct ip` needs no agent. After creating a DHCP
-> guest, `pmox vm ip <vmid> --wait` polls until the address appears.
+> `vm ip` tries three sources in order: the QEMU guest agent, the static
+> cloud-init config, and — for agent-less DHCP VMs — a same-LAN ARP scan by the
+> guest's MAC (`source: "arp"`, IPv4 only). The scan needs pmox to run on the
+> same network as the guest (works from the LAN, not over a VPN) and degrades
+> to an actionable error elsewhere. `ct ip` needs no agent. After creating a
+> DHCP guest, `pmox vm ip <vmid> --wait` polls until an address appears.
 
 > Using `vm ...` on a container VMID (or vice versa) returns a clear error with
 > the corrective command. Unknown VMIDs error with "not found" — check
@@ -209,7 +211,8 @@ default. For a known static IP, pass `--ip <cidr>,gw=<ip>`, or set a `[network]`
 pool (`cidr`/`gateway`/`pool`, outside your DHCP scope) so pmox auto-allocates a
 free address — then `pmox vm ip <vmid>` returns it immediately from cloud-init
 config, no guest agent needed. For DHCP guests, `pmox vm ip <vmid> --wait`
-polls until the agent reports an address.
+polls until an address appears — via the guest agent, or a same-LAN ARP scan
+when pmox runs on the same network as the guest.
 
 To get a **DHCP** VM's IP via the guest agent instead, clone a template that has
 `qemu-guest-agent` baked in: `pmox --dangerous vm up web --from-template <vmid>`

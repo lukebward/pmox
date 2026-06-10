@@ -61,7 +61,7 @@ pmox health                          one-shot cluster triage
 pmox nodes list / cluster status / cluster resources [--type vm|node|storage]
 pmox vm list / ct list [--node N] [--fields ...]
 pmox vm describe <vmid>              status+config+snapshots+tasks+network in one call
-pmox vm ip <vmid> [--wait]           live address (VM: guest agent; CT: native)
+pmox vm ip <vmid> [--wait]           live address (agent, static config, or same-LAN ARP scan)
 pmox storage list / storage content <id>
 pmox task list / task status <upid> / task log <upid>
 pmox image list [--ct]
@@ -96,8 +96,10 @@ Waiting, timeouts, recovery
   expires, the Proxmox task keeps running server-side:
     pmox task wait <upid>            resume waiting (node parsed from the UPID)
     pmox task status/log <upid>      inspect
-- After a DHCP create: pmox vm ip <vmid> --wait polls until the guest agent
-  reports an address.
+- After a DHCP create: pmox vm ip <vmid> --wait polls until the guest reports
+  an address — via the guest agent, or a same-LAN ARP scan by the VM's MAC
+  (source: "arp"; needs pmox to run on the same network as the guest, so it
+  works from the LAN but not over a VPN; IPv4 only).
 - If a provisioning plan fails partway, the error envelope tells you exactly
   what completed and what to do: a guest that was already created is NOT
   cleaned up, and a blind retry would create a second one under a new VMID —
