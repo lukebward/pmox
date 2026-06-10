@@ -136,7 +136,7 @@ pmox vm list [--node N]              QEMU VMs (cluster-wide)
 pmox vm status <vmid>                live status (node auto-resolved)
 pmox vm config <vmid>                raw configuration
 pmox vm describe <vmid>              consolidated view: status + config + snapshots + tasks
-pmox vm ip <vmid> [--all] [--wait]   live IP(s) from the guest agent (--wait: poll until one appears)
+pmox vm ip <vmid> [--all] [--wait]   live IP(s): agent, static config, or same-LAN ARP scan
 
 pmox vm set <vmid> -o key=val        update config (needs --dangerous; delete=key needs --yes)
 pmox vm resize <vmid> --disk D --size [+]G    grow a disk (needs --dangerous)
@@ -304,10 +304,13 @@ pmox vm ip 100 --all        # also show loopback, IPv6 link-local, and MACs
 pmox ct ip 200              # same for containers
 ```
 
-For VMs this reads the live interfaces from the **QEMU guest agent**, so the
-guest needs `qemu-guest-agent` installed and running and `agent: 1` set —
-cloud-init VMs from `vm new` already enable `agent: 1`. Containers report their
-interfaces directly, so `ct ip` needs no agent. JSON output (the default when
+For VMs this tries three sources in order: the **QEMU guest agent**; the
+static cloud-init `ipconfigN` config; and — for agent-less DHCP VMs — a
+**same-LAN ARP scan** by the guest's MAC (`source: "arp"`). The scan nudges the
+local subnet with empty UDP datagrams and reads the OS neighbor table, so it
+needs pmox to run on the same L2 network as the VM's bridge (your desk: yes; over
+a VPN: no), and it is IPv4-only. Containers report their interfaces directly,
+so `ct ip` needs no agent. JSON output (the default when
 piped) carries every interface and address; the table view hides loopback and
 link-local unless you pass `--all`.
 

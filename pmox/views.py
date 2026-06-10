@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from . import arp
 from .catalog import CPU_PRESSURE, MEM_PRESSURE, STORAGE_PRESSURE
 
 _RECENT_TASK_LIMIT = 50
@@ -167,13 +168,48 @@ def _safe_ip_addresses(client, kind, vmid, node) -> dict:
         return {"available": False, "reason": str(exc)}
 
 
-def guest_ip_addresses(client, kind: str, vmid: int, node: Optional[str] = None) -> dict:
+def _arp_interfaces(config: dict, scan: Optional[arp.ScanConfig], base_error: str, cause: Exception) -> list:
+    """Last-resort same-LAN ARP discovery; raises ``RuntimeError`` when it can't help.
+
+    The error message gains a note only when a sweep actually ran and missed —
+    a skipped scan (no ScanConfig, no MACs, no candidate subnet) keeps the
+    original message so it reflects what was tried.
+    """
+    pairs = arp.extract_macs(config) if scan is not None else []
+    if not pairs:
+        raise RuntimeError(base_error) from cause
+    matches, swept = arp.find_ips_by_mac([mac for _, mac in pairs], scan)
+    if not matches:
+        if swept:
+            base_error += (
+                " A same-LAN ARP scan also found no address for MAC(s) "
+                + ", ".join(mac for _, mac in pairs)
+                + " (the scan only works when pmox runs on the same network as the guest)."
+            )
+        raise RuntimeError(base_error) from cause
+    return [
+        {
+            "name": key,
+            "mac": mac,
+            "addresses": [
+                {"family": "ipv4", "address": matches[arp.normalize_mac(mac)],
+                 "prefix": None, "scope": "global"}
+            ],
+        }
+        for key, mac in pairs
+        if arp.normalize_mac(mac) in matches
+    ]
+
+
+def guest_ip_addresses(client, kind: str, vmid: int, node: Optional[str] = None,
+                       scan: Optional[arp.ScanConfig] = None) -> dict:
     """Live network interfaces + IPs for a guest, normalized across qemu/lxc.
 
-    For VMs the live source is the QEMU guest agent; if it isn't available, this
-    falls back to any static IP declared in the cloud-init ``ipconfigN`` config
-    (``source: "config"``). Raises ``LookupError`` if the guest can't be located,
-    or ``RuntimeError`` with an actionable message if neither source yields data.
+    VM sources, in order: the QEMU guest agent; static cloud-init ``ipconfigN``
+    (``source: "config"``); and — when ``scan`` is given — a same-LAN ARP
+    lookup by the guest's MAC (``source: "arp"``, IPv4 only, no prefix).
+    Raises ``LookupError`` if the guest can't be located, or ``RuntimeError``
+    with an actionable message when no source yields data.
     """
     row = locate_guest_checked(client, kind, vmid)
     node = node or (row.get("node") if row else None)
@@ -185,15 +221,19 @@ def guest_ip_addresses(client, kind: str, vmid: int, node: Optional[str] = None)
         source = "guest-agent"
         try:
             payload = client.agent_network_interfaces(node, vmid)
-        except Exception as agent_exc:  # noqa: BLE001 - agent down -> fall back to static ipconfig
-            interfaces = _parse_ipconfig_interfaces(client.guest_config(node, kind, vmid))
-            if not interfaces:
-                raise RuntimeError(
+        except Exception as agent_exc:  # noqa: BLE001 - agent down -> static config -> ARP
+            config = client.guest_config(node, kind, vmid)
+            interfaces = _parse_ipconfig_interfaces(config)
+            if interfaces:
+                source = "config"
+            else:
+                base_error = (
                     f"Could not read network interfaces for VM {vmid}: {agent_exc}. "
                     f"Ensure qemu-guest-agent is installed and running in the guest and "
                     f"'agent: 1' is set (pmox vm set {vmid} -o agent=1 --dangerous)."
-                ) from agent_exc
-            source = "config"
+                )
+                interfaces = _arp_interfaces(config, scan, base_error, agent_exc)
+                source = "arp"
         else:
             interfaces = _parse_qemu_interfaces(payload)
     else:

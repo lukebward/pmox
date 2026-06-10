@@ -36,7 +36,7 @@ try:  # typer >= 0.26 vendors click as typer._click; older typer uses the real p
 except ModuleNotFoundError:
     from typer import _click as click
 
-from . import __version__, catalog, guide, ipam, provision, views
+from . import __version__, arp, catalog, guide, ipam, provision, views
 from .client import ProxmoxClient
 from .config import ConfigError, Settings, _parse_bool, load_settings
 from .errors import PlanError, PmoxError, TaskFailed, TaskTimeout
@@ -739,7 +739,8 @@ def nodes_status(ctx: typer.Context, node: str = typer.Argument(..., help="Node 
         emit(client.node_status(node), json_output=ctx.obj.json, title=f"Node {node}")
 
 
-def _wait_for_ip(ctx: typer.Context, client, kind: str, vmid: int, node: Optional[str]) -> dict:
+def _wait_for_ip(ctx: typer.Context, client, kind: str, vmid: int, node: Optional[str],
+                 scan: Optional[arp.ScanConfig]) -> dict:
     """Poll guest_ip_addresses until a primary address appears (bounded by --timeout).
 
     Agent-not-up / guest-still-booting errors are retried; a missing guest fails
@@ -749,7 +750,7 @@ def _wait_for_ip(ctx: typer.Context, client, kind: str, vmid: int, node: Optiona
     last_error: Optional[Exception] = None
     while True:
         try:
-            data = views.guest_ip_addresses(client, kind, vmid, node=node)
+            data = views.guest_ip_addresses(client, kind, vmid, node=node, scan=scan)
             if data.get("primary"):
                 return data
             last_error = None
@@ -851,8 +852,9 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
 
     @group.command(
         "ip",
-        help=f"Show the live IP address(es) of a {label} (VM: via guest agent; CT: via interfaces). "
-        "With --wait, poll until an address appears (bounded by --timeout).",
+        help=f"Show the live IP address(es) of a {label} (VM: guest agent, static config, or a "
+        "same-LAN ARP scan by MAC; CT: via interfaces). With --wait, poll until an address "
+        "appears (bounded by --timeout).",
     )
     def _ip(
         ctx: typer.Context,
@@ -862,10 +864,12 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
     ):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
+            settings = ctx.obj.settings
+            scan = arp.ScanConfig(cidr=settings.net_cidr, host=settings.host, port=settings.port or 8006)
             if ctx.obj.wait:
-                data = _wait_for_ip(ctx, client, kind, vmid, node)
+                data = _wait_for_ip(ctx, client, kind, vmid, node, scan)
             else:
-                data = views.guest_ip_addresses(client, kind, vmid, node=node)
+                data = views.guest_ip_addresses(client, kind, vmid, node=node, scan=scan)
             if ctx.obj.json:
                 emit(data, json_output=True)
                 return
@@ -1230,11 +1234,12 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                         f"Connect to {chosen_ip} as the image's default user (e.g. 'ubuntu' on Ubuntu)."
                     )
                 elif from_template is not None:
-                    hint = (f"The address comes from DHCP; once the template's guest agent is up, "
-                            f"`pmox vm ip {target_vmid} --wait` returns it.")
+                    hint = (f"The address comes from DHCP; `pmox vm ip {target_vmid} --wait` returns it "
+                            f"(via the template's guest agent, or a same-LAN ARP scan).")
                 else:
-                    hint = ("The address comes from DHCP and is not known here. Check your router's DHCP "
-                            "leases, or use --ip / a [network] pool for a static address.")
+                    hint = (f"The address comes from DHCP; run `pmox vm ip {target_vmid} --wait` — found via "
+                            f"a same-LAN ARP scan (or check your DHCP leases). Use --ip or a [network] "
+                            f"pool for a static address.")
                 if ctx.obj.json:
                     _ok(
                         ctx, f"VM {target_vmid} ({name}) is up on {target_node}",

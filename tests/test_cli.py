@@ -2258,6 +2258,99 @@ def test_fields_on_image_list_both_modes(fake_client, creds):
     assert json.loads(r2.output) == [{"template": "t1"}]
 
 
+# ------------------------------------------------- ARP discovery via vm ip --
+
+
+def _agentless_vm(fake_client):
+    fake_client.locate_guest.return_value = _ip_row()
+    fake_client.agent_network_interfaces.side_effect = RuntimeError("guest agent is not running")
+    fake_client.guest_config.return_value = {
+        "net0": "virtio=BC:24:11:40:C4:A3,bridge=vmbr0",
+        "ipconfig0": "ip=dhcp",
+    }
+
+
+def test_vm_ip_resolves_via_arp(fake_client, creds, monkeypatch):
+    _agentless_vm(fake_client)
+    seen = {}
+
+    def fake_find(macs, scan):
+        seen["macs"], seen["scan"] = list(macs), scan
+        return {"bc241140c4a3": "192.168.0.253"}, True
+
+    monkeypatch.setattr(cli.views.arp, "find_ips_by_mac", fake_find)
+    r = inv(["--json", "vm", "ip", "150"], dict(creds, PROXMOX_NET_CIDR="192.168.0.0/24"))
+    assert r.exit_code == 0, r.output
+    data = json.loads(r.output)
+    assert data["source"] == "arp"
+    assert data["primary"] == "192.168.0.253"
+    assert seen["macs"] == ["BC:24:11:40:C4:A3"]
+    assert seen["scan"].cidr == "192.168.0.0/24"
+    assert seen["scan"].host == "pve.local"
+
+
+def test_vm_ip_wait_retries_until_arp_match(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    _agentless_vm(fake_client)
+    results = iter([({}, True), ({"bc241140c4a3": "192.168.0.253"}, True)])
+    monkeypatch.setattr(cli.views.arp, "find_ips_by_mac", lambda macs, scan: next(results))
+    r = inv(["--json", "--wait", "vm", "ip", "150"], creds)
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["primary"] == "192.168.0.253"
+
+
+def test_vm_ip_arp_miss_keeps_actionable_error(fake_client, creds, monkeypatch):
+    _agentless_vm(fake_client)
+    monkeypatch.setattr(cli.views.arp, "find_ips_by_mac", lambda macs, scan: ({}, True))
+    r = inv(["--json", "vm", "ip", "150"], creds)
+    assert r.exit_code == 1, r.output
+    msg = json.loads(r.output)["message"]
+    assert "ARP scan" in msg and "agent: 1" in msg
+
+
+def test_describe_never_scans(fake_client, creds, monkeypatch):
+    fake_client.locate_guest.return_value = _ip_row()
+    fake_client.guest_status.return_value = {"status": "running"}
+    fake_client.guest_config.return_value = {"net0": "virtio=BC:24:11:40:C4:A3,bridge=vmbr0"}
+    fake_client.list_snapshots.return_value = []
+    fake_client.list_tasks.return_value = []
+    fake_client.agent_network_interfaces.side_effect = RuntimeError("agent down")
+    monkeypatch.setattr(
+        cli.views.arp, "find_ips_by_mac",
+        lambda macs, scan: (_ for _ in ()).throw(AssertionError("describe must not scan")),
+    )
+    r = inv(["--json", "vm", "describe", "150"], creds)
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["network"]["available"] is False
+
+
+def test_ct_ip_never_scans(fake_client, creds, monkeypatch):
+    fake_client.locate_guest.return_value = {"vmid": 200, "node": "pve1", "name": "ct", "type": "lxc"}
+    fake_client.lxc_interfaces.return_value = [{"name": "eth0", "hwaddr": "aa:bb", "inet": "10.0.0.5/24"}]
+    monkeypatch.setattr(
+        cli.views.arp, "find_ips_by_mac",
+        lambda macs, scan: (_ for _ in ()).throw(AssertionError("ct must not scan")),
+    )
+    r = inv(["--json", "ct", "ip", "200"], creds)
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["source"] == "lxc-interfaces"
+
+
+def test_vm_up_dhcp_hint_mentions_arp(fake_client, creds, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("ssh-ed25519 AAAA u@h")
+    fake_client.cluster_nextid.return_value = "150"
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.storage_content.return_value = []
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
+    r = inv(["--json", "--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04",
+             "--node", "pve1", "--ssh-key", str(key)], creds)
+    assert r.exit_code == 0, r.output
+    hint = json.loads(r.output)["hint"]
+    assert "vm ip 150 --wait" in hint
+
+
 # ------------------------------------------------- dangerous-mode hardening --
 
 

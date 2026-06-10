@@ -271,3 +271,97 @@ def test_guest_ip_addresses_lxc_stopped_raises():
     c.lxc_interfaces.side_effect = RuntimeError("500 not running")
     with pytest.raises(RuntimeError, match="stopped"):
         views.guest_ip_addresses(c, "lxc", 200)
+
+
+# ---- ARP fallback (source: "arp") ----
+
+
+def _agentless_client(config=None):
+    c = _ip_client({"vmid": 150, "node": "lukeserver", "name": "web", "type": "qemu"})
+    c.agent_network_interfaces.side_effect = RuntimeError("guest agent is not running")
+    c.guest_config.return_value = config if config is not None else {
+        "net0": "virtio=BC:24:11:40:C4:A3,bridge=vmbr0",
+        "ipconfig0": "ip=dhcp",
+    }
+    return c
+
+
+def test_guest_ip_addresses_arp_fallback(monkeypatch):
+    c = _agentless_client()
+    monkeypatch.setattr(
+        views.arp, "find_ips_by_mac",
+        lambda macs, scan: ({"bc241140c4a3": "192.168.0.253"}, True),
+    )
+    out = views.guest_ip_addresses(c, "qemu", 150, scan=views.arp.ScanConfig())
+    assert out["source"] == "arp"
+    assert out["primary"] == "192.168.0.253"
+    iface = out["interfaces"][0]
+    assert iface["name"] == "net0" and iface["mac"] == "BC:24:11:40:C4:A3"
+    assert iface["addresses"] == [
+        {"family": "ipv4", "address": "192.168.0.253", "prefix": None, "scope": "global"}
+    ]
+
+
+def test_guest_ip_addresses_arp_only_matched_nics(monkeypatch):
+    c = _agentless_client({
+        "net0": "virtio=BC:24:11:40:C4:A3,bridge=vmbr0",
+        "net1": "virtio=AA:BB:CC:DD:EE:02,bridge=vmbr0",
+    })
+    monkeypatch.setattr(
+        views.arp, "find_ips_by_mac",
+        lambda macs, scan: ({"aabbccddee02": "192.168.0.99"}, False),
+    )
+    out = views.guest_ip_addresses(c, "qemu", 150, scan=views.arp.ScanConfig())
+    assert [i["name"] for i in out["interfaces"]] == ["net1"]
+    assert out["primary"] == "192.168.0.99"
+
+
+def test_guest_ip_addresses_no_scan_keeps_existing_error(monkeypatch):
+    c = _agentless_client()
+    monkeypatch.setattr(
+        views.arp, "find_ips_by_mac",
+        lambda macs, scan: (_ for _ in ()).throw(AssertionError("must not scan")),
+    )
+    with pytest.raises(RuntimeError, match="agent: 1"):
+        views.guest_ip_addresses(c, "qemu", 150)
+
+
+def test_guest_ip_addresses_scan_miss_notes_the_sweep(monkeypatch):
+    c = _agentless_client()
+    monkeypatch.setattr(views.arp, "find_ips_by_mac", lambda macs, scan: ({}, True))
+    with pytest.raises(RuntimeError) as ei:
+        views.guest_ip_addresses(c, "qemu", 150, scan=views.arp.ScanConfig())
+    assert "ARP scan" in str(ei.value)
+    assert "BC:24:11:40:C4:A3" in str(ei.value)
+    assert "agent: 1" in str(ei.value)
+
+
+def test_guest_ip_addresses_skipped_scan_keeps_message_unchanged(monkeypatch):
+    c = _agentless_client()
+    monkeypatch.setattr(views.arp, "find_ips_by_mac", lambda macs, scan: ({}, False))
+    with pytest.raises(RuntimeError) as ei:
+        views.guest_ip_addresses(c, "qemu", 150, scan=views.arp.ScanConfig())
+    assert "ARP scan" not in str(ei.value)
+
+
+def test_guest_ip_addresses_no_macs_keeps_message_unchanged(monkeypatch):
+    c = _agentless_client({"ipconfig0": "ip=dhcp"})
+    monkeypatch.setattr(
+        views.arp, "find_ips_by_mac",
+        lambda macs, scan: (_ for _ in ()).throw(AssertionError("must not scan")),
+    )
+    with pytest.raises(RuntimeError, match="agent: 1"):
+        views.guest_ip_addresses(c, "qemu", 150, scan=views.arp.ScanConfig())
+
+
+def test_guest_ip_addresses_static_config_beats_arp(monkeypatch):
+    c = _agentless_client({
+        "net0": "virtio=BC:24:11:40:C4:A3,bridge=vmbr0",
+        "ipconfig0": "ip=192.168.0.240/24,gw=192.168.0.1",
+    })
+    monkeypatch.setattr(
+        views.arp, "find_ips_by_mac",
+        lambda macs, scan: (_ for _ in ()).throw(AssertionError("must not scan")),
+    )
+    out = views.guest_ip_addresses(c, "qemu", 150, scan=views.arp.ScanConfig())
+    assert out["source"] == "config"

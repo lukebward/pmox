@@ -6,6 +6,27 @@ All notable changes to pmox are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-10
+
+### Added
+
+- **Same-LAN ARP discovery for `vm ip`**: when the guest agent is unavailable
+  and no static cloud-init address exists, pmox now matches the VM's MAC
+  against the local ARP table (nudging the subnet with empty UDP datagrams on
+  a miss) and reports the address with `source: "arp"`. Automatic — no flag —
+  for the `vm ip` / `vm ip --wait` path only (`describe` never scans). Works
+  when pmox runs on the same L2 network as the guest; IPv4 only; the candidate
+  subnet comes from `[network] cidr` or a /24 around the local outbound IP
+  (capped at /22). Closes the loop for DHCP VMs created from stock cloud
+  images, which don't ship `qemu-guest-agent`.
+
+### Changed
+
+- `vm up` DHCP hints now point at `pmox vm ip <vmid> --wait` (agent or
+  same-LAN ARP scan) instead of the router's DHCP leases.
+- When an ARP sweep ran and found nothing, the `vm ip` error notes that, so
+  the message reflects exactly what was tried.
+
 ## [0.5.0] - 2026-06-09
 
 Agent-ergonomics release: every error an agent can hit now lands as a
@@ -181,7 +202,8 @@ Initial release.
 - Claude Code plugin (`plugin/`) with a `proxmox` skill and the
   `/pmox:cluster-status`, `/pmox:list-guests`, and `/pmox:run` commands.
 
-[Unreleased]: https://github.com/lukebward/pmox/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/lukebward/pmox/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/lukebward/pmox/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/lukebward/pmox/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/lukebward/pmox/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/lukebward/pmox/compare/v0.2.0...v0.3.0
