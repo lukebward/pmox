@@ -84,3 +84,59 @@ def parse_neighbors(text: str) -> Dict[str, str]:
         if ip_match and mac_match:
             table.setdefault(normalize_mac(mac_match.group(0)), ip_match.group(1))
     return table
+
+
+def read_neighbor_table(platform: Optional[str] = None) -> str:
+    """Raw neighbor-table text from the OS, or '' when every command fails.
+
+    Windows and macOS ship ``arp -a``; on Linux ``ip neigh`` is preferred with
+    net-tools ``arp -a`` as the fallback.
+    """
+    platform = platform or sys.platform
+    commands = (
+        [["arp", "-a"]]
+        if platform in ("win32", "darwin")
+        else [["ip", "neigh"], ["arp", "-a"]]
+    )
+    for cmd in commands:
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if proc.returncode == 0 and proc.stdout:
+            return proc.stdout
+    return ""
+
+
+def _send_nudges(addresses: List[str]) -> None:
+    """One empty UDP datagram per address (discard port): forces ARP resolution.
+
+    Fire-and-forget — nothing needs to receive these, and per-address send
+    errors are irrelevant.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        for address in addresses:
+            try:
+                sock.sendto(b"", (address, _NUDGE_PORT))
+            except OSError:
+                continue
+    finally:
+        sock.close()
+
+
+def _outbound_ip(host: Optional[str], port: int) -> Optional[str]:
+    """Local IPv4 the OS would use to reach ``host`` (UDP connect = pure route
+    lookup, no packet sent). Tries the Proxmox host first so a VPN default
+    route can't mislead the subnet guess; falls back to a public address."""
+    targets = ([host] if host else []) + ["8.8.8.8"]
+    for target in targets:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect((target, port or 8006))
+            return sock.getsockname()[0]
+        except OSError:
+            continue
+        finally:
+            sock.close()
+    return None
