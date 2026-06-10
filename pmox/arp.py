@@ -140,3 +140,43 @@ def _outbound_ip(host: Optional[str], port: int) -> Optional[str]:
         finally:
             sock.close()
     return None
+
+
+def candidate_network(scan: ScanConfig) -> Optional[ipaddress.IPv4Network]:
+    """Subnet to sweep: the declared [network] cidr when configured, else a /24
+    around the local outbound IPv4. None when unknown, IPv6, or larger than the
+    /22 sweep cap."""
+    if scan.cidr:
+        try:
+            net = ipaddress.ip_network(scan.cidr, strict=False)
+        except ValueError:
+            return None
+        if not isinstance(net, ipaddress.IPv4Network) or net.prefixlen < _MAX_SWEEP_PREFIX:
+            return None
+        return net
+    local = _outbound_ip(scan.host, scan.port)
+    if not local:
+        return None
+    return ipaddress.ip_network(f"{local}/24", strict=False)
+
+
+def find_ips_by_mac(macs: List[str], scan: ScanConfig) -> Tuple[Dict[str, str], bool]:
+    """(normalized MAC -> IPv4 for every match, whether a nudge sweep ran).
+
+    Free neighbor-table check first; only on zero matches does it nudge the
+    candidate subnet, wait for ARP replies to settle, and re-read.
+    """
+    wanted = {normalize_mac(m) for m in macs}
+
+    def _matches() -> Dict[str, str]:
+        return {m: ip for m, ip in parse_neighbors(read_neighbor_table()).items() if m in wanted}
+
+    found = _matches()
+    if found:
+        return found, False
+    network = candidate_network(scan)
+    if network is None:
+        return {}, False
+    _send_nudges([str(host) for host in network.hosts()])
+    time.sleep(_SETTLE_SECONDS)
+    return _matches(), True

@@ -226,3 +226,71 @@ def test_outbound_ip_no_host_uses_public_route(monkeypatch):
     monkeypatch.setattr(arp.socket, "socket", lambda *a, **k: sock)
     assert arp._outbound_ip(None, 8006) == "192.168.0.193"
     assert sock.connected == ("8.8.8.8", 8006)
+
+
+# ---- candidate_network ----
+
+
+def test_candidate_network_uses_settings_cidr():
+    net = arp.candidate_network(arp.ScanConfig(cidr="192.168.0.0/24"))
+    assert str(net) == "192.168.0.0/24"
+
+
+def test_candidate_network_rejects_oversized_cidr():
+    assert arp.candidate_network(arp.ScanConfig(cidr="10.0.0.0/16")) is None
+
+
+def test_candidate_network_rejects_bad_and_ipv6_cidr():
+    assert arp.candidate_network(arp.ScanConfig(cidr="banana")) is None
+    assert arp.candidate_network(arp.ScanConfig(cidr="2001:db8::/64")) is None
+
+
+def test_candidate_network_falls_back_to_local_slash24(monkeypatch):
+    monkeypatch.setattr(arp, "_outbound_ip", lambda host, port: "192.168.0.193")
+    net = arp.candidate_network(arp.ScanConfig(host="pve.local", port=443))
+    assert str(net) == "192.168.0.0/24"
+
+
+def test_candidate_network_none_without_local_ip(monkeypatch):
+    monkeypatch.setattr(arp, "_outbound_ip", lambda host, port: None)
+    assert arp.candidate_network(arp.ScanConfig()) is None
+
+
+# ---- find_ips_by_mac ----
+
+
+def test_find_ips_cache_hit_skips_sweep(monkeypatch):
+    monkeypatch.setattr(arp, "read_neighbor_table", lambda platform=None: LINUX_IP_NEIGH)
+    nudged = []
+    monkeypatch.setattr(arp, "_send_nudges", lambda addrs: nudged.append(len(addrs)))
+    matches, swept = arp.find_ips_by_mac(["BC:24:11:40:C4:A3"], arp.ScanConfig(cidr="192.168.0.0/24"))
+    assert matches == {"bc241140c4a3": "192.168.0.253"}
+    assert swept is False
+    assert nudged == []
+
+
+def test_find_ips_sweeps_on_miss_then_matches(monkeypatch):
+    reads = iter(["", LINUX_IP_NEIGH])
+    monkeypatch.setattr(arp, "read_neighbor_table", lambda platform=None: next(reads))
+    nudged = []
+    monkeypatch.setattr(arp, "_send_nudges", lambda addrs: nudged.append(len(addrs)))
+    monkeypatch.setattr(arp.time, "sleep", lambda s: None)
+    matches, swept = arp.find_ips_by_mac(["BC:24:11:40:C4:A3"], arp.ScanConfig(cidr="192.168.0.0/24"))
+    assert matches == {"bc241140c4a3": "192.168.0.253"}
+    assert swept is True
+    assert nudged == [254]  # /24 host addresses, no network/broadcast
+
+
+def test_find_ips_miss_with_no_candidate_network(monkeypatch):
+    monkeypatch.setattr(arp, "read_neighbor_table", lambda platform=None: "")
+    monkeypatch.setattr(arp, "_outbound_ip", lambda host, port: None)
+    matches, swept = arp.find_ips_by_mac(["BC:24:11:40:C4:A3"], arp.ScanConfig())
+    assert matches == {} and swept is False
+
+
+def test_find_ips_sweep_still_missing(monkeypatch):
+    monkeypatch.setattr(arp, "read_neighbor_table", lambda platform=None: "")
+    monkeypatch.setattr(arp, "_send_nudges", lambda addrs: None)
+    monkeypatch.setattr(arp.time, "sleep", lambda s: None)
+    matches, swept = arp.find_ips_by_mac(["BC:24:11:40:C4:A3"], arp.ScanConfig(cidr="192.168.0.0/24"))
+    assert matches == {} and swept is True
