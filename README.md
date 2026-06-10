@@ -1,4 +1,5 @@
 # pmox
+(AI Assistance was used in contribution to this project)
 
 [![PyPI](https://img.shields.io/pypi/v/pmox)](https://pypi.org/project/pmox/)
 [![Python](https://img.shields.io/pypi/pyversions/pmox)](https://pypi.org/project/pmox/)
