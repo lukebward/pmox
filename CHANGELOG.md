@@ -6,6 +6,21 @@ All notable changes to pmox are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- README rewritten around a quick start and the agent workflow; the full
+  command, provisioning, and configuration references moved to `docs/`.
+
+### Fixed
+
+- README inaccuracies: the agent-template walkthrough placed `--yes` before
+  the subcommand (the placement the safety docs themselves forbid); config
+  precedence read as env < file instead of file < env; `vm ip --wait` was
+  described as agent-only (the ARP fallback shipped in 0.6.0); `ct new
+  --storage` was documented as a hardcoded `local-lvm` default instead of
+  auto-detect; the architecture list omitted `arp.py` and misattributed
+  container-template discovery to `catalog.py`.
+
 ## [0.6.0] - 2026-06-10
 
 ### Added

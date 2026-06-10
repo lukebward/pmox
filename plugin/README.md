@@ -5,12 +5,11 @@ CLI, with **read-only-by-default** safety.
 
 ## Prerequisite: install the pmox CLI
 
-The plugin drives the `pmox` command, so install it first (from the repo root):
+The plugin drives the `pmox` command, so install it first:
 
 ```bash
-pipx install .        # recommended: puts `pmox` on PATH globally
-# or
-pip install -e .      # editable; `pmox` available in that Python environment
+pip install pmox      # or: pipx install pmox
+# from a clone: pip install -e .
 ```
 
 Then configure credentials (see the main [README](../README.md)): set
