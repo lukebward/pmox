@@ -388,8 +388,15 @@ def build_vm_clone_plan(
     nameserver=None,
     full=True,
     start=True,
+    cores=None,
+    memory=None,
+    storage=None,
 ) -> list:
-    """Build the plan for cloning a template into a ready-to-SSH VM."""
+    """Build the plan for cloning a template into a ready-to-SSH VM.
+
+    ``cores``/``memory`` resize the clone after the copy (a clone inherits the
+    template's hardware otherwise); ``storage`` directs a full clone's disks.
+    """
     if name:
         validate_guest_name(name)
     clone_args = {"node": node, "kind": "qemu", "vmid": template_id, "newid": newid}
@@ -397,6 +404,8 @@ def build_vm_clone_plan(
         clone_args["name"] = name
     if full:
         clone_args["full"] = 1
+    if storage:
+        clone_args["storage"] = storage
     plan = [step("clone_guest", clone_args, await_task=True, describe=f"clone {template_id} -> {newid}")]
 
     ci = {}
@@ -410,6 +419,10 @@ def build_vm_clone_plan(
         ci["cipassword"] = cipassword
     if nameserver:
         ci["nameserver"] = nameserver
+    if cores:
+        ci["cores"] = cores
+    if memory:
+        ci["memory"] = memory
     if ci:
         plan.append(step("update_config", {"node": node, "kind": "qemu", "vmid": newid, **ci}, await_task=False, describe="set cloud-init"))
 

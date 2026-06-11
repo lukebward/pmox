@@ -52,13 +52,16 @@ Confirm it connects, then create your first VM:
 ```bash
 pmox health                 # quorum, node load, storage, guest counts
 pmox --dangerous vm up web --image ubuntu-24.04 --wait    # prints the new VMID
-pmox vm ip <vmid> --wait    # the DHCP address it got (agent or same-LAN ARP scan)
+pmox vm ip <vmid> --wait    # agent-reported DHCP address, in seconds
 ssh ubuntu@<ip>
 ```
 
-On a multi-node cluster add `--node <name>`; cloud-image provisioning needs
-PVE 8.2+ and a storage with the `import` content type. Tear it down again with
-`pmox --dangerous vm delete <vmid> --yes`.
+The first `vm up` per image takes a few minutes: it builds a golden template
+with `qemu-guest-agent` baked in, then clones it. Every later `vm up` clones
+in seconds, and `vm ip` gets its answer from the guest agent — no scans, no
+guessing. On a multi-node cluster add `--node <name>`; cloud-image
+provisioning needs PVE 8.2+ and a storage with the `import` content type. Tear
+the VM down again with `pmox --dangerous vm delete <vmid> --yes`.
 
 ## Safety model
 
@@ -114,13 +117,21 @@ first (`pip install pmox`). Permission details: [`plugin/README.md`](plugin/READ
 
 ## Provisioning
 
-One command from cloud image to SSH-able VM — pmox downloads (and caches) the
-image, picks storage, injects your SSH key (generating one if needed), and
-boots with DHCP:
+One command from cloud image to SSH-able, agent-backed VM:
 
 ```bash
 pmox --dangerous vm up web --image ubuntu-24.04 --wait
 ```
+
+pmox downloads (and caches) the image, picks storage, injects your SSH key
+(generating one if needed), and boots with DHCP. On the first run per image it
+also builds an **agent golden template**: a one-time VM that gets
+`qemu-guest-agent` installed over SSH, is cleaned for cloning, and is converted
+to a tagged template. Every `vm up --image` after that clones the template, so
+`pmox vm ip <vmid> --wait` is answered by the guest agent — reliably, on any
+network. Build it explicitly (or with a static bootstrap address) via
+`pmox --dangerous template build ubuntu-24.04`; opt out with
+`--no-agent-template` or `agent_templates = false`.
 
 The other modes — details and walkthroughs in
 [docs/provisioning.md](docs/provisioning.md):
@@ -156,6 +167,8 @@ pmox guide                            the built-in agent guide
 pmox vm list / ct list                all guests, cluster-wide
 pmox vm describe 100                  status + config + snapshots + tasks
 pmox vm ip 100 --wait                 live IP: agent, cloud-init config, or ARP
+pmox template build ubuntu-24.04      agent golden template      (--dangerous)
+pmox template list                    templates, agent ones marked
 pmox vm set 100 -o cores=4            edit config                (--dangerous)
 pmox vm snapshot create 100 pre       snapshots                  (--dangerous)
 pmox vm start 100                     also shutdown/reboot/...   (--dangerous)

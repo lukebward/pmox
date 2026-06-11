@@ -119,8 +119,11 @@ Mutations return structured results — read the fields, never parse the prose:
 ```
 
 With `--wait` the `upid` is replaced by a `task` object (final task status).
-`vm new`/`ct new`/`vm up`/`image pull --as-template` all return the created
-`vmid`; `vm up` adds `name`, `ip` (`null` when DHCP) and `ssh`.
+`vm new`/`ct new`/`vm up`/`image pull --as-template`/`template build` all
+return the created `vmid`; `vm up` adds `name`, `ip` (`null` when DHCP),
+`ssh`, `template` (the template it cloned, or null), `agent` (true = the
+clone's guest agent answers `vm ip`), and `template_built` (true = this call
+also built the agent template).
 
 ### `--dry-run`
 
@@ -167,6 +170,7 @@ pmox vm ip <vmid> [--wait]               # live IP(s): agent, static config, or 
 pmox ct ip <vmid>                        # (--all adds loopback, link-local, MACs)
 pmox image list                          # VM cloud image catalog
 pmox image list --ct                     # LXC container templates (node auto-picked)
+pmox template list                       # VM templates; agent-enabled ones marked
 ```
 
 > `vm ip` tries three sources in order: the QEMU guest agent, the static
@@ -199,27 +203,46 @@ pmox --dangerous vm new web \
 pmox auto-picks a VMID and node, imports the image, wires cloud-init, and
 waits for the task to complete.
 
-### Seamless one-shot VM (`vm up`)
+### One-shot VM (`vm up`) — the default flow
 
 ```
 pmox --dangerous vm up web --image ubuntu-24.04 --wait
 ```
 
-Zero-config: auto-routes the image import to an `import`-capable storage, ensures
-an SSH key (generating one if absent), and creates the VM with **DHCP** by
-default. For a known static IP, pass `--ip <cidr>,gw=<ip>`, or set a `[network]`
-pool (`cidr`/`gateway`/`pool`, outside your DHCP scope) so pmox auto-allocates a
-free address — then `pmox vm ip <vmid>` returns it immediately from cloud-init
-config, no guest agent needed. For DHCP guests, `pmox vm ip <vmid> --wait`
-polls until an address appears — via the guest agent, or a same-LAN ARP scan
-when pmox runs on the same network as the guest.
+Auto-routes the image import to an `import`-capable storage, ensures an SSH key
+(generating one if absent), and creates the VM with DHCP by default.
 
-To get a **DHCP** VM's IP via the guest agent instead, clone a template that has
-`qemu-guest-agent` baked in: `pmox --dangerous vm up web --from-template <vmid>`
-(mutually exclusive with `--image`; the clone inherits the template's hardware
-and pmox warns if --size/--storage are passed alongside).
-pmox can't install the agent (token-only), so build that template once yourself
-(boot a base VM, `apt install qemu-guest-agent`, convert it to a template).
+`vm up --image` rides **agent golden templates**: when one exists for the image
+on the node it is cloned (`--size`/`--disk`/`--storage` still apply); when
+missing, the FIRST run builds it — boots a build VM, SSHes in with pmox's key,
+installs `qemu-guest-agent`, cleans it for cloning, converts it to a tagged
+template — then clones it. That first run takes a few minutes; later runs clone
+in seconds, and `pmox vm ip <vmid> --wait` is answered by the guest agent
+(reliable, no ARP scans, works over VPN). The envelope's `agent` /
+`template` / `template_built` fields say which path ran. `--no-agent-template`
+or `PMOX_AGENT_TEMPLATES=0` opts out (raw image import, agent-less).
+
+For a known static IP, pass `--ip <cidr>,gw=<ip>`, or set a `[network]` pool
+(`cidr`/`gateway`/`pool`, outside your DHCP scope) so pmox auto-allocates a
+free address — then `pmox vm ip <vmid>` returns it immediately from cloud-init
+config.
+
+### Agent template control (`template build` / `template list`)
+
+```
+pmox --dangerous template build ubuntu-24.04 [--ip <cidr>,gw=<ip>] [--user U]
+pmox template list
+```
+
+Pre-build the agent template explicitly — same job vm up does on first use,
+with control over the bootstrap address (`--ip` pins a static one; released to
+DHCP before conversion) and the SSH login (`--user`, needed for non-catalog
+images). Idempotent: an existing template is reused (`reused: true`). Suggest
+this when `vm ip` keeps falling back to ARP scans or the LAN makes discovery
+unreliable. To clone a specific template VMID instead of the image's agent
+template: `pmox --dangerous vm up web --from-template <vmid>` (mutually
+exclusive with `--image`; the clone inherits the template's hardware and pmox
+warns if --size/--storage are passed alongside).
 
 ### Ready container (ready to SSH)
 
@@ -352,11 +375,16 @@ pmox task log <upid> [--node <node>]
 pmox task wait <upid> [--node <node>]
 pmox image list
 pmox image list --ct [--node <node>]
+pmox template list [--node <node>]
 ```
 
 ### Change (need `--dangerous`)
 
 ```
+pmox --dangerous template build <image> [--ip <cidr>,gw=<ip>] [--user <u>]
+                                [--vmid <id>] [--name <n>] [--size ...] [--disk <GiB>]
+                                [--storage <storage>] [--import-storage <storage>]
+                                [--ssh-key <path>] [--dry-run]
 pmox --dangerous vm new <name> [--image <name|url|volid>] [--from-template <vmid>]
                                 [--size small|medium|large] [--disk <GiB>]
                                 [--storage <storage>] [--node <node>] [--vmid <id>]

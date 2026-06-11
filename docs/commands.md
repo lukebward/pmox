@@ -52,6 +52,10 @@ pmox task status|log|wait <upid>     node parsed from the UPID; `wait` polls to 
 pmox image list                      list VM cloud-image catalog
 pmox image list --ct [--node N]      list LXC container templates available on a node
 pmox image pull <name|url> --storage S --node N [--as-template | --checksum sha256:<hex>]
+
+pmox template list [--node N]        VM templates cluster-wide; agent ones marked
+pmox template build <image> [--ip <cidr>,gw=<ip>] [--user U] [--vmid N] [--name X]
+                                     agent golden template (needs --dangerous; see docs/provisioning.md)
 ```
 
 `--as-template` and `--checksum` don't combine — verify the checksum on a plain
@@ -74,6 +78,12 @@ Provisioning commands always wait on their internal steps; if a wait times out,
 resume with `pmox task wait <upid>`. `PMOX_DANGEROUS=1` is honored from the
 real environment only — never from a `.env` file — and `--no-dangerous` forces
 read-only regardless.
+
+`vm up --image` rides agent templates by default: it clones the image's
+template when present and builds it first when missing (see
+[docs/provisioning.md](provisioning.md)). `--no-agent-template` forces a raw
+image import for one call; `PMOX_AGENT_TEMPLATES=0` or
+`[defaults] agent_templates = false` disables the behavior entirely.
 
 `--dry-run` prints the exact API call as JSON and makes zero mutations, but it
 still performs read calls to resolve nodes and VMIDs, so cluster connectivity

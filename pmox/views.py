@@ -7,9 +7,10 @@ thin one-endpoint-per-method wrapper.
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
-from . import arp
+from . import arp, guestops
 from .catalog import CPU_PRESSURE, MEM_PRESSURE, STORAGE_PRESSURE
 
 _RECENT_TASK_LIMIT = 50
@@ -43,6 +44,26 @@ def locate_guest_checked(client, kind: str, vmid) -> Optional[dict]:
             f"Guest {vmid}{name} is {what} — use `pmox {right} ...` instead of `pmox {wrong} ...`."
         )
     return row
+
+
+def find_agent_template(client, image: str, node: Optional[str] = None) -> Optional[dict]:
+    """The cluster-resources row of the agent template built from ``image``.
+
+    A match is a QEMU template carrying both the ``pmox-agent`` tag and the
+    image marker tag (see :func:`pmox.guestops.agent_tags`), optionally pinned
+    to ``node`` — clones happen on the template's node, so a template elsewhere
+    in the cluster doesn't count.
+    """
+    wanted = {guestops.AGENT_TAG, guestops.image_tag(image)}
+    for row in client.cluster_resources(type="vm"):
+        if row.get("type") != "qemu" or not row.get("template"):
+            continue
+        if node and row.get("node") != node:
+            continue
+        tags = {t for t in re.split(r"[;,]", str(row.get("tags") or "")) if t}
+        if wanted <= tags:
+            return row
+    return None
 
 
 def describe_guest(client, kind: str, vmid: int, node: Optional[str] = None) -> dict:

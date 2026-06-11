@@ -53,7 +53,9 @@ Success envelope (mutations)
 {"ok": true, "message": "...", "op": "qemu.start", "vmid": 100, "node": "pve1",
  "upid": "UPID:..." | "task": {...final task status...}, "hint": "..."}
 Read vmid/node/upid from the fields — never parse the message prose.
-`vm up` additionally returns name, ip (null when DHCP) and ssh.
+`vm up` additionally returns name, ip (null when DHCP), ssh, template (the
+template VMID it cloned, or null) and agent (true when the clone came from an
+agent template, so `vm ip --wait` is agent-backed).
 
 Discovery (always safe, no flags)
 ---------------------------------
@@ -76,9 +78,27 @@ pmox --dangerous vm up <name> --image ubuntu-24.04
     storage (local-lvm preferred), ensures an SSH key (~/.ssh/id_ed25519.pub,
     generated if missing), creates + starts the VM. DHCP by default; --ip
     <cidr>,gw=<ip> or a configured [network] pool gives a static address.
+    AGENT TEMPLATES (the default flow): the first `vm up --image X` on a node
+    also builds an agent golden template for X — boots a build VM, SSHes in
+    with the key pmox manages, installs qemu-guest-agent, cleans it for
+    cloning, converts it to a tagged template — then clones it for your VM.
+    That first run takes a few minutes; every later `vm up --image X` clones
+    in seconds, and `vm ip --wait` is answered by the guest agent (no ARP
+    scans, works over VPN). The envelope's `agent`/`template`/`template_built`
+    fields say which path ran. Opt out with --no-agent-template or
+    PMOX_AGENT_TEMPLATES=0. Images without a known login user (raw URLs or
+    volids without --ciuser) fall back to a plain image VM with a hint.
+pmox --dangerous template build ubuntu-24.04
+    Pre-build the agent template explicitly (same thing vm up does on first
+    use, but with control over --ip/--user/--vmid/--name). Build VM address:
+    --ip <cidr>,gw=<ip>, else the [network] pool, else DHCP + discovery.
+    Idempotent: reuses an existing template (`reused`: true). Use this when
+    the LAN makes DHCP discovery unreliable — a static --ip sidesteps it.
+pmox template list
+    VM templates cluster-wide; `agent: true` marks pmox-built agent templates.
 pmox --dangerous vm up <name> --from-template <vmid>
-    Clone a prepared template instead (inherits its hardware; the clone of an
-    agent-baked template makes `vm ip --wait` work on DHCP).
+    Clone a specific template VMID instead (inherits its hardware; the clone of
+    an agent-baked template makes `vm ip --wait` work on DHCP).
 pmox --dangerous ct new <name> --template ubuntu-24.04
     Same idea for LXC containers.
 pmox --dangerous image pull <name|url> --storage S --node N [--checksum sha256:<hex>]
@@ -99,7 +119,9 @@ Waiting, timeouts, recovery
 - After a DHCP create: pmox vm ip <vmid> --wait polls until the guest reports
   an address — via the guest agent, or a same-LAN ARP scan by the VM's MAC
   (source: "arp"; needs pmox to run on the same network as the guest, so it
-  works from the LAN but not over a VPN; IPv4 only).
+  works from the LAN but not over a VPN; IPv4 only). Agent-backed guests
+  (clones of a `template build` template) answer via the agent in seconds and
+  need no scan — prefer that path; suggest `template build` when scans fail.
 - If a provisioning plan fails partway, the error envelope tells you exactly
   what completed and what to do: a guest that was already created is NOT
   cleaned up, and a blind retry would create a second one under a new VMID —

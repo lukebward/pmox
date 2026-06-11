@@ -41,18 +41,21 @@ IMAGE_CATALOG = {
         "filename": "noble-server-cloudimg-amd64.qcow2",
         "checksum": None,
         "algo": None,
+        "user": "ubuntu",
     },
     "ubuntu-22.04": {
         "url": "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img",
         "filename": "jammy-server-cloudimg-amd64.qcow2",
         "checksum": None,
         "algo": None,
+        "user": "ubuntu",
     },
     "debian-12": {
         "url": "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2",
         "filename": "debian-12-genericcloud-amd64.qcow2",
         "checksum": None,
         "algo": None,
+        "user": "debian",
     },
 }
 
@@ -60,13 +63,15 @@ IMAGE_CATALOG = {
 def resolve_image(image: str) -> dict:
     """Resolve a ``--image`` argument to a fetch spec.
 
-    Returns either ``{"kind": "url", "url", "filename", "checksum", "algo"}``
-    (a catalog short-name or an explicit https URL) or ``{"kind": "volid",
-    "volid"}`` (an image already present on a storage).
+    Returns either ``{"kind": "url", "url", "filename", "checksum", "algo",
+    "user"}`` (a catalog short-name or an explicit https URL) or ``{"kind":
+    "volid", "volid", "user"}`` (an image already present on a storage).
+    ``user`` is the image's default cloud-init login user — known for catalog
+    entries, None otherwise.
     """
     if image in IMAGE_CATALOG:
         e = IMAGE_CATALOG[image]
-        return {"kind": "url", "url": e["url"], "filename": e["filename"], "checksum": e["checksum"], "algo": e["algo"]}
+        return {"kind": "url", "url": e["url"], "filename": e["filename"], "checksum": e["checksum"], "algo": e["algo"], "user": e["user"]}
     if image.startswith("http://") or image.startswith("https://"):
-        return {"kind": "url", "url": image, "filename": image.rsplit("/", 1)[-1], "checksum": None, "algo": None}
-    return {"kind": "volid", "volid": image}
+        return {"kind": "url", "url": image, "filename": image.rsplit("/", 1)[-1], "checksum": None, "algo": None, "user": None}
+    return {"kind": "volid", "volid": image, "user": None}

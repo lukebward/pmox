@@ -32,6 +32,7 @@ ENV_NET_NAMESERVER = "PROXMOX_NET_NAMESERVER"
 ENV_DEFAULT_IMPORT_STORAGE = "PROXMOX_DEFAULT_IMPORT_STORAGE"
 ENV_DEFAULT_SSH_KEY = "PROXMOX_DEFAULT_SSH_KEY"
 ENV_DEFAULT_CIUSER = "PROXMOX_DEFAULT_CIUSER"
+ENV_AGENT_TEMPLATES = "PMOX_AGENT_TEMPLATES"
 
 
 class ConfigError(Exception):
@@ -61,6 +62,8 @@ class Settings:
     default_import_storage: Optional[str] = None
     default_ssh_key: Optional[str] = None
     default_ciuser: Optional[str] = None
+    # vm up clones a matching agent template automatically (built via `template build`)
+    agent_templates: bool = True
 
     @property
     def user(self) -> Optional[str]:
@@ -150,14 +153,18 @@ def _from_file(data: dict) -> dict:
             "net_nameserver": ("nameserver", str),
         },
     ))
+    defaults = data.get("defaults") or {}
     out.update(_coerce(
-        data.get("defaults") or {},
+        defaults,
         keys={
             "default_import_storage": ("import_storage", str),
             "default_ssh_key": ("ssh_key", str),
             "default_ciuser": ("ciuser", str),
         },
     ))
+    # bool: an explicit false must be honoured (same treatment as verify_ssl)
+    if "agent_templates" in defaults and defaults["agent_templates"] != "":
+        out["agent_templates"] = _parse_bool(defaults["agent_templates"])
     return out
 
 
@@ -179,9 +186,11 @@ def _from_env(env: dict) -> dict:
             "default_ciuser": (ENV_DEFAULT_CIUSER, str),
         },
     )
-    # verify_ssl is a special case: an explicit "false" must be honoured.
+    # bools are special cases: an explicit "false"/"0" must be honoured.
     if ENV_VERIFY_SSL in env and env[ENV_VERIFY_SSL] != "":
         out["verify_ssl"] = _parse_bool(env[ENV_VERIFY_SSL])
+    if ENV_AGENT_TEMPLATES in env and env[ENV_AGENT_TEMPLATES] != "":
+        out["agent_templates"] = _parse_bool(env[ENV_AGENT_TEMPLATES])
     return out
 
 

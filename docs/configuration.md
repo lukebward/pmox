@@ -40,6 +40,7 @@ timeout = 30
 ssh_key = "~/.ssh/id_ed25519.pub"
 ciuser = "ubuntu"
 import_storage = "local"
+agent_templates = true   # vm up clones/builds agent golden templates (default on)
 
 # static-IP pool for `vm up` / `vm new` (optional)
 [network]
@@ -62,6 +63,7 @@ pool = "192.168.0.200-192.168.0.250"   # MUST be outside your DHCP scope
 | `PROXMOX_DEFAULT_IMPORT_STORAGE` | preferred storage for image imports |
 | `PROXMOX_DEFAULT_SSH_KEY` | default `--ssh-key` for provisioning |
 | `PROXMOX_DEFAULT_CIUSER` | default `--ciuser` for provisioning |
+| `PMOX_AGENT_TEMPLATES` | `0` disables the `vm up` agent-template flow (default on) |
 | `PMOX_JSON` | `1` always JSON, `0` always tables, `auto` detect (default) |
 | `PMOX_DANGEROUS` | `1` enables write mode — honored from the real environment only, never from `.env` |
 | `PMOX_CONFIG` | path to the TOML config file |

@@ -1,3 +1,3 @@
-"""pmox - a friendly, AI-friendly CLI for exploring and managing a Proxmox VE cluster."""
+"""pmox - a CLI for exploring and managing a Proxmox VE cluster, built for AI agents."""
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"

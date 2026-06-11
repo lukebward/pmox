@@ -42,12 +42,13 @@ def test_resolve_image_url():
         "filename": "my-cloud.qcow2",
         "checksum": None,
         "algo": None,
+        "user": None,
     }
 
 
 def test_resolve_image_volid():
     spec = catalog.resolve_image("local:import/foo.qcow2")
-    assert spec == {"kind": "volid", "volid": "local:import/foo.qcow2"}
+    assert spec == {"kind": "volid", "volid": "local:import/foo.qcow2", "user": None}
 
 
 def test_image_catalog_filenames_are_qcow2():

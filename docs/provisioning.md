@@ -24,9 +24,49 @@ pmox --dangerous vm up web --image ubuntu-24.04 --wait
 pmox routes the image import to a file-based storage, picks a disk storage
 (local-lvm preferred; override with `--storage`), ensures an SSH key (generating
 `~/.ssh/id_ed25519.pub` if absent; `--ssh-key` is repeatable and `~` is
-expanded), and creates the VM. With DHCP the address isn't known on return —
-`pmox vm ip <vmid> --wait` polls for it via the guest agent or a same-LAN ARP
-scan (see [Finding a guest's IP](#finding-a-guests-ip-vm-ip--ct-ip)).
+expanded), and creates the VM.
+
+By default this rides the **agent template** for the image: if one exists on
+the node it is cloned (your `--size`/`--disk`/`--storage` still apply); if not,
+`vm up` builds it first — a one-time job of a few minutes, announced as it
+happens — and then clones it. Either way `pmox vm ip <vmid> --wait` is
+answered by the clone's guest agent in seconds. Opt out per call with
+`--no-agent-template` (raw image import, agent-less), or globally with
+`PMOX_AGENT_TEMPLATES=0` / `[defaults] agent_templates = false`.
+
+## Agent templates (`template build`)
+
+The agent template is what makes DHCP IPs reliable: a golden image with
+`qemu-guest-agent` installed, built once per image per node:
+
+```
+pmox --dangerous template build ubuntu-24.04
+```
+
+What it does, in order: create a VM from the image (cloud-init injects the SSH
+key pmox manages) → SSH in and install + enable `qemu-guest-agent` → clean the
+guest for cloning (`cloud-init clean`, truncate `/etc/machine-id`, remove SSH
+host keys — so clones get fresh identities and DHCP leases) → verify the agent
+answers through the Proxmox API → shut down → tag `pmox-agent` +
+`img-<image>` → convert to a template. It is idempotent: when a matching
+template already exists, it is reported and reused.
+
+To reach the build VM over SSH, pmox tries — in order, none of it relying on
+ARP — the VM's MAC-derived IPv6 link-local address (a pure function of the
+config, resolved via NDP), then the static IPv4 you assigned, then DHCP
+discovery as a last resort:
+
+- `--ip 192.168.0.250/24,gw=192.168.0.1` pins a static bootstrap address
+  (released back to DHCP before conversion).
+- A configured `[network]` pool allocates one automatically.
+- With neither, the build VM uses DHCP and pmox finds it via link-local.
+
+`--user` sets the SSH login for images whose default user pmox doesn't know
+(catalog images are known: `ubuntu`, `debian`); `--vmid`/`--name` pin identity;
+`--size`/`--disk`/`--storage` shape the template (clones can resize). This is
+the one pmox operation that reaches inside a guest — over SSH, with the key it
+injected moments earlier. Containers don't need any of this: `ct ip` reads
+interfaces directly.
 
 Provisioning defaults can live in config so you don't repeat them: `ssh_key`,
 `ciuser`, and `import_storage` in the TOML file, or
@@ -48,22 +88,13 @@ pool = "192.168.0.200-192.168.0.250"   # MUST be outside your DHCP scope
 
 ### A known IP on a DHCP VM
 
-To get a known IP on a DHCP VM, clone a template that already runs
-`qemu-guest-agent` — the agent reports the address, so no static IP or pool is
-needed:
+The default `vm up --image` flow already handles this — clones of the agent
+template report their DHCP address via the guest agent. To clone a specific
+template VMID instead (e.g. one you built by hand):
 
 ```
 pmox --dangerous vm up web --from-template 9000 --wait
 pmox vm ip <vmid> --wait   # polls until the agent reports the DHCP address
-```
-
-Build that agent template once (pmox is token-only, so this step is manual):
-
-```
-pmox --dangerous vm up base --image ubuntu-24.04 --ip 192.168.0.250/24,gw=192.168.0.1 --wait
-ssh ubuntu@192.168.0.250 "sudo apt-get update && sudo apt-get install -y qemu-guest-agent && sudo systemctl enable --now qemu-guest-agent"
-pmox --dangerous vm stop <vmid> --yes
-#   then convert it to a template: Proxmox UI -> Convert to template, or `qm template <vmid>` on the node
 ```
 
 ## VM from a cloud image (`vm new --image`)

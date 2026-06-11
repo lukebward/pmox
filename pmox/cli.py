@@ -36,7 +36,7 @@ try:  # typer >= 0.26 vendors click as typer._click; older typer uses the real p
 except ModuleNotFoundError:
     from typer import _click as click
 
-from . import __version__, arp, catalog, guide, ipam, provision, views
+from . import __version__, arp, catalog, guestops, guide, ipam, provision, views
 from .client import ProxmoxClient
 from .config import ConfigError, Settings, _parse_bool, load_settings
 from .errors import PlanError, PmoxError, TaskFailed, TaskTimeout
@@ -1151,6 +1151,10 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
             no_ssh_key: bool = typer.Option(False, "--no-ssh-key", help="Don't attach or generate an SSH key."),
             ciuser: Optional[str] = typer.Option(None, "--ciuser", help="Cloud-init user (default from config)."),
             vmid: Optional[int] = typer.Option(None, "--vmid", help="VMID (auto-assigned if omitted)."),
+            no_agent_template: bool = typer.Option(
+                False, "--no-agent-template",
+                help="Build from the raw image even when an agent template for it exists (see `pmox template build`).",
+            ),
         ):
             with error_boundary(ctx.obj.json):
                 client = _get_client(ctx)
@@ -1160,6 +1164,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 target_vmid = vmid if vmid is not None else int(client.cluster_nextid())
                 profile = catalog.size_params(size or "small")
 
+                agent_tpl = None
                 if from_template is not None:
                     _warn_ignored_with_template([
                         ("--size", size is not None),
@@ -1171,12 +1176,28 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                     resolved_import = None
                 else:
                     target_node = node or _single_node_or_die(client)
-                    resolved_storage = provision.resolve_disk_storage(client, target_node, storage)
-                    needs_import = catalog.resolve_image(image)["kind"] != "volid"
-                    resolved_import = (
-                        provision.resolve_import_storage(client, target_node, import_storage or settings.default_import_storage)
-                        if needs_import else None
-                    )
+                    if settings.agent_templates and not no_agent_template:
+                        agent_tpl = views.find_agent_template(client, image, node=target_node)
+                    if agent_tpl is not None:
+                        # clone the agent template instead of importing the raw image
+                        resolved_storage = None
+                        resolved_import = None
+                    else:
+                        resolved_storage = provision.resolve_disk_storage(client, target_node, storage)
+                        needs_import = catalog.resolve_image(image)["kind"] != "volid"
+                        resolved_import = (
+                            provision.resolve_import_storage(client, target_node, import_storage or settings.default_import_storage)
+                            if needs_import else None
+                        )
+
+                # one-shot default flow: no agent template yet -> build one, then clone it
+                would_build = False
+                build_user = None
+                if (from_template is None and agent_tpl is None and settings.agent_templates
+                        and not no_agent_template and not no_ssh_key):
+                    build_user = ciuser or settings.default_ciuser or catalog.resolve_image(image).get("user")
+                    would_build = bool(build_user)
+                template_built = False
 
                 if ip and ip.strip().lower() != "dhcp":
                     ipconfig = provision.build_ipconfig(ip)
@@ -1207,6 +1228,14 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                             ciuser=chosen_ciuser, cipassword=None, nameserver=settings.net_nameserver,
                             full=True, start=True,
                         )
+                    if agent_tpl is not None:
+                        return provision.build_vm_clone_plan(
+                            client, node=target_node, template_id=agent_tpl["vmid"], newid=target_vmid,
+                            name=name, disk=disk, sshkeys=sshkeys, ipconfig=ipconfig,
+                            ciuser=chosen_ciuser, cipassword=None, nameserver=settings.net_nameserver,
+                            full=True, start=True,
+                            cores=profile["cores"], memory=profile["memory"], storage=storage,
+                        )
                     return provision.build_vm_image_plan(
                         client, node=target_node, vmid=target_vmid, name=name,
                         cores=profile["cores"], memory=profile["memory"], disk=disk,
@@ -1216,15 +1245,43 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                     )
 
                 if ctx.obj.dry_run:
+                    if would_build:
+                        print(json.dumps({
+                            "dry_run": True, "op": "qemu.up", "node": target_node, "vmid": target_vmid,
+                            "agent_template": None, "agent_template_action": "build+clone",
+                            "hint": (f"First run builds the agent template for {image}, then clones it "
+                                     f"for this VM. Preview the build with `pmox --dry-run template build {image}`."),
+                        }, default=str, indent=2))
+                        return
                     # dry-run must be side-effect-free: read existing keys, never generate one
                     existing = "\n".join(
                         Path(p).expanduser().read_text().strip()
                         for p in key_paths if Path(p).expanduser().exists()
                     ) or None
-                    print(json.dumps({"dry_run": True, "op": "qemu.up", "node": target_node, "vmid": target_vmid, "plan": _build(existing)}, default=str, indent=2))
+                    print(json.dumps({
+                        "dry_run": True, "op": "qemu.up", "node": target_node, "vmid": target_vmid,
+                        "agent_template": agent_tpl["vmid"] if agent_tpl else None,
+                        "plan": _build(existing),
+                    }, default=str, indent=2))
                     return
 
                 require_dangerous(ctx.obj.dangerous)
+                if would_build:
+                    if not ctx.obj.json:
+                        err_console.print(
+                            f"[dim]No agent template for {image} on {target_node} — building one now "
+                            f"(one-time, a few minutes). Future `vm up --image {image}` calls will "
+                            f"clone it in seconds.[/dim]"
+                        )
+                    built = _agent_template_build(
+                        ctx, client, image=image, node=target_node,
+                        user=build_user, ssh_key=ssh_key, import_storage=import_storage,
+                    )
+                    agent_tpl = {"vmid": built["vmid"]}
+                    template_built = True
+                    if vmid is None:
+                        # the build consumed the VMID we had reserved for this VM
+                        target_vmid = int(client.cluster_nextid())
                 sshkeys = "\n".join(provision.ensure_ssh_key(p) for p in key_paths) or None
                 provision.execute_plan(client, target_node, _build(sshkeys), waiter=lambda n, upid: _maybe_wait(ctx, n, upid))
 
@@ -1236,15 +1293,21 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 elif from_template is not None:
                     hint = (f"The address comes from DHCP; `pmox vm ip {target_vmid} --wait` returns it "
                             f"(via the template's guest agent, or a same-LAN ARP scan).")
+                elif agent_tpl is not None:
+                    hint = (f"Run `pmox vm ip {target_vmid} --wait` — the clone's guest agent reports "
+                            f"the DHCP address (cloned from agent template {agent_tpl['vmid']}).")
                 else:
                     hint = (f"The address comes from DHCP; run `pmox vm ip {target_vmid} --wait` — found via "
-                            f"a same-LAN ARP scan (or check your DHCP leases). Use --ip or a [network] "
-                            f"pool for a static address.")
+                            f"a same-LAN ARP scan (or check your DHCP leases). Run "
+                            f"`pmox --dangerous template build {image}` once for instant, reliable "
+                            f"guest-agent IPs, or use --ip / a [network] pool for a static address.")
                 if ctx.obj.json:
                     _ok(
                         ctx, f"VM {target_vmid} ({name}) is up on {target_node}",
                         op="qemu.up", vmid=target_vmid, name=name, node=target_node,
-                        ip=chosen_ip, ssh=ssh_val, hint=hint,
+                        ip=chosen_ip, ssh=ssh_val,
+                        template=(agent_tpl["vmid"] if agent_tpl else from_template),
+                        agent=agent_tpl is not None, template_built=template_built, hint=hint,
                     )
                 elif chosen_ip:
                     console.print(f"VM {target_vmid}  {name}  ip {chosen_ip}")
@@ -1732,6 +1795,264 @@ def image_pull(
         _ok(ctx, f"Pulled {image} → {volid}", op="image.pull", node=node, volid=volid, upid=upid)
 
 
+# ---- agent templates ----
+template_app = typer.Typer(
+    help="Agent-enabled golden templates: build one per image with `template build`; "
+    "`vm up --image` then clones it automatically (guest-agent IPs, no ARP scans).",
+    no_args_is_help=True,
+)
+
+TEMPLATE_COLUMNS = [
+    Column("VMID", "vmid"),
+    Column("Name", "name"),
+    Column("Node", "node"),
+    Column("Agent", row_formatter=lambda r: "yes" if r.get("agent") else "-"),
+    Column("Tags", "tags"),
+]
+
+
+def _wait_for_agent(ctx: typer.Context, client, node: str, vmid: int) -> None:
+    """Poll the guest agent through the PVE API until it answers (bounded by --timeout)."""
+    deadline = time.monotonic() + ctx.obj.timeout
+    while True:
+        try:
+            client.agent_network_interfaces(node, vmid)
+            return
+        except Exception as exc:  # noqa: BLE001 - agent service still starting
+            if time.monotonic() >= deadline:
+                raise PmoxError(
+                    f"The guest agent in VM {vmid} did not respond within {ctx.obj.timeout}s: {exc}"
+                ) from exc
+        time.sleep(_POLL_SECONDS)
+
+
+def _wait_for_stopped(ctx: typer.Context, client, node: str, vmid: int) -> None:
+    """Poll until the guest reports 'stopped' (template conversion needs a stopped VM)."""
+    deadline = time.monotonic() + ctx.obj.timeout
+    while client.guest_status(node, "qemu", vmid).get("status") != "stopped":
+        if time.monotonic() >= deadline:
+            raise PmoxError(f"VM {vmid} did not stop within {ctx.obj.timeout}s.")
+        time.sleep(_POLL_SECONDS)
+
+
+@template_app.command("list")
+def template_list(ctx: typer.Context, node: Optional[str] = node_opt):
+    """List VM templates cluster-wide; 'agent' marks pmox-built agent templates."""
+    with error_boundary(ctx.obj.json):
+        client = _get_client(ctx)
+        rows = []
+        for r in client.cluster_resources(type="vm"):
+            if r.get("type") != "qemu" or not r.get("template"):
+                continue
+            if node and r.get("node") != node:
+                continue
+            tags = str(r.get("tags") or "")
+            rows.append({
+                "vmid": r.get("vmid"), "name": r.get("name"), "node": r.get("node"),
+                "tags": tags, "agent": guestops.AGENT_TAG in re.split(r"[;,]", tags),
+            })
+        rows.sort(key=lambda row: row["vmid"] or 0)
+        emit(rows, columns=TEMPLATE_COLUMNS, json_output=ctx.obj.json, title="Templates")
+
+
+@template_app.command("build")
+def template_build(
+    ctx: typer.Context,
+    image: str = typer.Argument(..., help="Cloud image: catalog name (e.g. ubuntu-24.04), https URL, or import volid."),
+    node: Optional[str] = typer.Option(None, "--node", "-n", help="Node to build on (auto-picked if one node)."),
+    vmid: Optional[int] = typer.Option(None, "--vmid", help="VMID for the template (auto-assigned if omitted)."),
+    name: Optional[str] = typer.Option(None, "--name", help="Template name (default: agent-<image>)."),
+    ip: Optional[str] = typer.Option(None, "--ip", help="Static <cidr>,gw=<ip> for the build VM (default: [network] pool allocation, else DHCP + discovery)."),
+    user: Optional[str] = typer.Option(None, "--user", help="Login user for the SSH step (default: the image's cloud-init user; known for catalog images)."),
+    ssh_key: Optional[List[str]] = typer.Option(None, "--ssh-key", help="SSH public key path (default ~/.ssh/id_ed25519.pub, generated if missing). The private half must sit next to it."),
+    storage: Optional[str] = typer.Option(None, "--storage", help="Disk storage (default: auto-detect; local-lvm preferred)."),
+    import_storage: Optional[str] = typer.Option(None, "--import-storage", help="Storage for the imported image (default: auto-detect)."),
+    size: str = typer.Option("small", "--size", help="Build VM sizing profile; clones resize per their own --size."),
+    disk: Optional[int] = typer.Option(None, "--disk", help="Template disk size in GiB (default: the image's size; clones can grow it)."),
+):
+    """Build an agent-enabled golden template from a cloud image. Needs --dangerous.
+
+    Boots a VM, SSHes in with the key pmox manages, installs qemu-guest-agent,
+    cleans the guest for cloning (cloud-init state, machine-id, host keys), and
+    converts it to a tagged template. `vm up --image <image>` clones it
+    automatically from then on, so `vm ip --wait` gets agent-reported addresses.
+    This is the one pmox operation that reaches inside a guest — over SSH, using
+    the key it injected moments earlier.
+    """
+    with error_boundary(ctx.obj.json):
+        client = _get_client(ctx)
+        target_node = node or _single_node_or_die(client)
+
+        existing = views.find_agent_template(client, image, node=target_node)
+        if existing:
+            _ok(
+                ctx,
+                f"Agent template for {image} already exists: {existing.get('name')} ({existing['vmid']}) on {target_node}",
+                op="qemu.template.build", vmid=existing["vmid"], node=target_node,
+                name=existing.get("name"), image=image, tags=existing.get("tags"), reused=True,
+                hint=f"`pmox --dangerous vm up <name> --image {image}` clones it automatically. Delete the template to rebuild.",
+            )
+            return
+
+        if ctx.obj.dry_run:
+            payload = _agent_template_build(
+                ctx, client, image=image, node=target_node, vmid=vmid, name=name, ip=ip,
+                user=user, ssh_key=ssh_key, storage=storage, import_storage=import_storage,
+                size=size, disk=disk, dry_run=True,
+            )
+            print(json.dumps(payload, default=str, indent=2))
+            return
+
+        require_dangerous(ctx.obj.dangerous)
+        result = _agent_template_build(
+            ctx, client, image=image, node=target_node, vmid=vmid, name=name, ip=ip,
+            user=user, ssh_key=ssh_key, storage=storage, import_storage=import_storage,
+            size=size, disk=disk,
+        )
+        _ok(
+            ctx, f"Agent template {result['name']} ({result['vmid']}) ready on {target_node}",
+            op="qemu.template.build", vmid=result["vmid"], node=target_node,
+            name=result["name"], image=image, tags=result["tags"], user=result["user"],
+            reused=False,
+            hint=(f"`pmox --dangerous vm up <name> --image {image}` now clones this template "
+                  f"automatically; `pmox vm ip <vmid> --wait` gets agent-reported IPs."),
+        )
+
+
+def _agent_template_build(
+    ctx: typer.Context, client, *, image: str, node: str,
+    vmid: Optional[int] = None, name: Optional[str] = None, ip: Optional[str] = None,
+    user: Optional[str] = None, ssh_key: Optional[List[str]] = None,
+    storage: Optional[str] = None, import_storage: Optional[str] = None,
+    size: str = "small", disk: Optional[int] = None, dry_run: bool = False,
+) -> dict:
+    """Resolve and run an agent-template build on ``node``.
+
+    Returns the result fields (vmid/name/tags/user) — or, with ``dry_run``, the
+    preview payload. The caller owns the --dangerous gate and the
+    existing-template short-circuit; this is shared by `template build` and the
+    `vm up` first-use auto-build.
+    """
+    settings = ctx.obj.settings
+    login_user = user or catalog.resolve_image(image).get("user")
+    if not login_user:
+        raise ValueError(
+            f"Cannot determine the login user for {image!r}; pass --user "
+            f"(the image's default cloud-init user, e.g. --user ubuntu)."
+        )
+    target_vmid = vmid if vmid is not None else int(client.cluster_nextid())
+    tpl_name = name or guestops.agent_template_name(image)
+    profile = catalog.size_params(size)
+    resolved_storage = provision.resolve_disk_storage(client, node, storage)
+    needs_import = catalog.resolve_image(image)["kind"] != "volid"
+    resolved_import = (
+        provision.resolve_import_storage(client, node, import_storage or settings.default_import_storage)
+        if needs_import else None
+    )
+
+    if ip:
+        ipconfig = provision.build_ipconfig(ip)
+        boot_ip = ip.split(",", 1)[0].split("/", 1)[0]
+        static_boot = True
+    elif settings.net_cidr and settings.net_gateway and settings.net_pool:
+        allocated = ipam.allocate_ip(
+            client, cidr=settings.net_cidr, gateway=settings.net_gateway, pool=settings.net_pool
+        )
+        ipconfig = f"ip={allocated},gw={settings.net_gateway}"
+        boot_ip = allocated.split("/", 1)[0]
+        static_boot = True
+    else:
+        ipconfig = provision.build_ipconfig("dhcp")
+        boot_ip = None
+        static_boot = False
+
+    key_paths = list(ssh_key or []) or [
+        settings.default_ssh_key or str(Path.home() / ".ssh" / "id_ed25519.pub")
+    ]
+
+    def _plan(sshkeys):
+        return provision.build_vm_image_plan(
+            client, node=node, vmid=target_vmid, name=tpl_name,
+            cores=profile["cores"], memory=profile["memory"], disk=disk,
+            storage=resolved_storage, import_storage=resolved_import, image=image,
+            sshkeys=sshkeys, ipconfig=ipconfig, ciuser=login_user,
+            cipassword=None, nameserver=settings.net_nameserver, start=True,
+        )
+
+    post_steps = [
+        "install agent", "verify agent",
+        "shutdown", "finalize config", "convert to template",
+    ]
+    if dry_run:
+        # dry-run must be side-effect-free: read existing keys, never generate one
+        existing_keys = "\n".join(
+            Path(p).expanduser().read_text().strip()
+            for p in key_paths if Path(p).expanduser().exists()
+        ) or None
+        return {
+            "dry_run": True, "op": "qemu.template.build", "node": node,
+            "vmid": target_vmid, "plan": _plan(existing_keys), "post_steps": post_steps,
+        }
+
+    sshkeys = "\n".join(provision.ensure_ssh_key(p) for p in key_paths)
+    priv_key = guestops.private_key_path(key_paths[0])
+    plan = _plan(sshkeys)
+    provision.execute_plan(client, node, plan, waiter=lambda n, upid: _maybe_wait(ctx, n, upid))
+    completed = [s["describe"] or s["op"] for s in plan]
+
+    def _install():
+        # Transport order is deliberate: MAC-derived IPv6 link-local first (a pure
+        # function of the config — NDP resolution, immune to ARP spoofing and DHCP
+        # state), then the static IPv4 we assigned, then DHCP discovery only when
+        # neither exists. Nothing here relies on ARP.
+        mac = next((m for _, m in arp.extract_macs(client.guest_config(node, "qemu", target_vmid))), None)
+        candidates = guestops.link_local_candidates(mac) if mac else []
+        if boot_ip:
+            candidates.append(boot_ip)
+        if not candidates:
+            scan = arp.ScanConfig(cidr=settings.net_cidr, host=settings.host, port=settings.port or 8006)
+            candidates = [_wait_for_ip(ctx, client, "qemu", target_vmid, node, scan)["primary"]]
+        guestops.establish_agent_ssh(login_user, candidates, priv_key)
+
+    def _shutdown():
+        upid = client.guest_power(node, "qemu", target_vmid, action="shutdown")
+        _maybe_wait(ctx, node, upid)
+        _wait_for_stopped(ctx, client, node, target_vmid)
+
+    def _finalize():
+        params = {"tags": guestops.agent_tags(image)}
+        if static_boot:
+            params["ipconfig0"] = "ip=dhcp"  # release the bootstrap address for clones
+        client.update_config(node, "qemu", target_vmid, **params)
+
+    steps = [
+        ("install agent", _install),
+        ("verify agent", lambda: _wait_for_agent(ctx, client, node, target_vmid)),
+        ("shutdown", _shutdown),
+        ("finalize config", _finalize),
+        ("convert to template", lambda: client.convert_to_template(node, "qemu", target_vmid)),
+    ]
+    for label, fn in steps:
+        try:
+            fn()
+        except Exception as exc:  # noqa: BLE001 - wrap with recovery context
+            raise PmoxError(
+                f"Template build failed at {label!r}: {exc}",
+                extra={
+                    "vmid": target_vmid, "node": node,
+                    "failed_step": label, "completed_steps": list(completed),
+                    "hint": (
+                        f"VM {target_vmid} was created on {node} but the build stopped at "
+                        f"{label!r}. Inspect with `pmox vm describe {target_vmid}`, then delete it "
+                        f"(`pmox --dangerous vm delete {target_vmid} --yes`) and rerun, or finish manually."
+                    ),
+                },
+            ) from exc
+        completed.append(label)
+
+    return {"vmid": target_vmid, "name": tpl_name, "tags": guestops.agent_tags(image), "user": login_user}
+
+
 app.add_typer(nodes_app, name="nodes")
 app.add_typer(vm_app, name="vm")
 app.add_typer(ct_app, name="ct")
@@ -1739,6 +2060,7 @@ app.add_typer(storage_app, name="storage")
 app.add_typer(cluster_app, name="cluster")
 app.add_typer(task_app, name="task")
 app.add_typer(image_app, name="image")
+app.add_typer(template_app, name="template")
 
 
 def _json_mode_from_argv(argv: List[str]) -> bool:

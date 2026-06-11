@@ -6,6 +6,38 @@ All notable changes to pmox are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-10
+
+One-shot agent-backed VMs: the first `vm up --image X` builds a golden
+template with `qemu-guest-agent` baked in, and every later `vm up` clones it —
+so `vm ip --wait` is answered by the agent in seconds instead of relying on
+ARP scans.
+
+### Added
+
+- **`pmox template build <image>`**: build an agent-enabled golden template —
+  boot a VM from a cloud image, SSH in with the key pmox manages, install
+  `qemu-guest-agent`, clean the guest for cloning (cloud-init state,
+  machine-id, SSH host keys), tag it (`pmox-agent` + `img-<image>`), and
+  convert it to a template. Idempotent (reuses an existing template). The one
+  pmox operation that reaches inside a guest — over SSH, using the key it
+  injected moments earlier.
+- **`vm up --image` default flow**: clones the image's agent template
+  automatically (honoring `--size`/`--disk`/`--storage` on the clone); builds
+  it first when missing (one-time, announced in human mode). The success
+  envelope gains `template`, `agent`, and `template_built` fields. Opt out
+  per-call with `--no-agent-template`, per-environment with
+  `PMOX_AGENT_TEMPLATES=0`, or per-config with `[defaults] agent_templates = false`.
+- **`pmox template list`**: VM templates cluster-wide, marking agent-enabled ones.
+- **ARP-free SSH bootstrap**: the build reaches the guest via its MAC-derived
+  IPv6 link-local address first (EUI-64 — a pure function of the config, NDP
+  resolution, immune to ARP spoofing and DHCP state), then the assigned static
+  IPv4, with DHCP discovery only as a last resort. SSH auth failures retry for
+  a window because cloud images socket-activate sshd before cloud-init has
+  written `authorized_keys`.
+- Catalog images now carry their default login user (`ubuntu`/`debian`) for
+  the build's SSH step; `template build --user` overrides for URL/volid images.
+
 ### Changed
 
 - README rewritten around a quick start and the agent workflow; the full

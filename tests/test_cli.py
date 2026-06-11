@@ -1509,7 +1509,7 @@ def test_vm_up_allocates_ip_and_creates(fake_client, creds, tmp_path, monkeypatc
     fake_client.create_guest.return_value = "UPID:create"
     fake_client.guest_power.return_value = "UPID:start"
     fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
-    r = inv(["--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+    r = inv(["--dangerous", "vm", "up", "web", "--no-agent-template", "--image", "ubuntu-24.04", "--node", "pve1",
              "--ssh-key", str(key), "--ciuser", "ubuntu"], _net_creds(creds))
     assert r.exit_code == 0, r.output
     create = fake_client.create_guest.call_args.kwargs
@@ -1528,7 +1528,7 @@ def test_vm_up_json_output(fake_client, creds, tmp_path, monkeypatch):
     fake_client.cluster_resources.return_value = []
     fake_client.storage_content.return_value = []
     fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
-    r = inv(["--json", "--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+    r = inv(["--json", "--dangerous", "vm", "up", "web", "--no-agent-template", "--image", "ubuntu-24.04", "--node", "pve1",
              "--ssh-key", str(key), "--ciuser", "ubuntu"], _net_creds(creds))
     assert r.exit_code == 0, r.output
     out = json.loads(r.output)
@@ -1544,10 +1544,10 @@ def test_vm_up_explicit_ip_skips_allocation(fake_client, creds, tmp_path, monkey
     fake_client.list_storage.return_value = _IMPORT_STORAGES
     fake_client.storage_content.return_value = []
     fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
-    r = inv(["--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+    monkeypatch.setattr(cli.ipam, "allocate_ip", lambda *a, **k: pytest.fail("allocation attempted"))
+    r = inv(["--dangerous", "vm", "up", "web", "--no-agent-template", "--image", "ubuntu-24.04", "--node", "pve1",
              "--ip", "192.168.0.77/24,gw=192.168.0.1", "--ssh-key", str(key)], creds)
     assert r.exit_code == 0, r.output
-    fake_client.cluster_resources.assert_not_called()
     assert fake_client.create_guest.call_args.kwargs["ipconfig0"] == "ip=192.168.0.77/24,gw=192.168.0.1"
     out = json.loads(r.output)
     assert out["ip"] == "192.168.0.77"
@@ -1563,10 +1563,10 @@ def test_vm_up_no_config_defaults_to_dhcp(fake_client, creds, tmp_path, monkeypa
     fake_client.storage_content.return_value = []
     fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
     # creds has no [network] pool and no --ip -> DHCP, zero config required
-    r = inv(["--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+    monkeypatch.setattr(cli.ipam, "allocate_ip", lambda *a, **k: pytest.fail("allocation attempted"))
+    r = inv(["--dangerous", "vm", "up", "web", "--no-agent-template", "--image", "ubuntu-24.04", "--node", "pve1",
              "--ssh-key", str(key)], creds)
     assert r.exit_code == 0, r.output
-    fake_client.cluster_resources.assert_not_called()  # no static allocation attempted
     assert fake_client.create_guest.call_args.kwargs["ipconfig0"] == "ip=dhcp"
     out = json.loads(r.output)
     assert out["ip"] is None and out["ssh"] is None
@@ -1580,7 +1580,7 @@ def test_vm_up_dhcp_human_output(fake_client, creds, tmp_path, monkeypatch):
     fake_client.list_storage.return_value = _IMPORT_STORAGES
     fake_client.storage_content.return_value = []
     fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
-    r = inv(["--no-json", "--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04",
+    r = inv(["--no-json", "--dangerous", "vm", "up", "web", "--no-agent-template", "--image", "ubuntu-24.04",
              "--node", "pve1", "--ssh-key", str(key)], creds)
     assert r.exit_code == 0, r.output
     assert "DHCP" in r.output
@@ -1647,7 +1647,7 @@ def test_vm_up_requires_image_or_template(fake_client, creds, tmp_path):
 def test_vm_up_image_and_template_mutually_exclusive(fake_client, creds, tmp_path):
     key = tmp_path / "id_ed25519.pub"
     key.write_text("ssh-ed25519 AAAA u@h")
-    r = inv(["--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04",
+    r = inv(["--dangerous", "vm", "up", "web", "--no-agent-template", "--image", "ubuntu-24.04",
              "--from-template", "9000", "--ssh-key", str(key)], creds)
     assert r.exit_code == 1, r.output
     fake_client.create_guest.assert_not_called()
@@ -1661,7 +1661,7 @@ def test_vm_up_dry_run(fake_client, creds, tmp_path):
     fake_client.list_storage.return_value = _IMPORT_STORAGES
     fake_client.cluster_resources.return_value = []
     fake_client.storage_content.return_value = []
-    r = inv(["--dry-run", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+    r = inv(["--dry-run", "vm", "up", "web", "--no-agent-template", "--image", "ubuntu-24.04", "--node", "pve1",
              "--ssh-key", str(key)], _net_creds(creds))
     assert r.exit_code == 0, r.output
     assert json.loads(r.output)["op"] == "qemu.up"
@@ -1675,7 +1675,7 @@ def test_vm_up_needs_dangerous(fake_client, creds, tmp_path):
     fake_client.list_storage.return_value = _IMPORT_STORAGES
     fake_client.cluster_resources.return_value = []
     fake_client.storage_content.return_value = []
-    r = inv(["vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+    r = inv(["vm", "up", "web", "--no-agent-template", "--image", "ubuntu-24.04", "--node", "pve1",
              "--ssh-key", str(key)], _net_creds(creds))
     assert r.exit_code == 4, r.output
     fake_client.create_guest.assert_not_called()
@@ -1688,7 +1688,7 @@ def test_vm_up_no_ssh_key(fake_client, creds, monkeypatch):
     fake_client.cluster_resources.return_value = []
     fake_client.storage_content.return_value = []
     fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
-    r = inv(["--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+    r = inv(["--dangerous", "vm", "up", "web", "--no-agent-template", "--image", "ubuntu-24.04", "--node", "pve1",
              "--no-ssh-key", "--ciuser", "ubuntu"], _net_creds(creds))
     assert r.exit_code == 0, r.output
     assert "sshkeys" not in fake_client.create_guest.call_args.kwargs
@@ -1703,7 +1703,7 @@ def test_vm_up_human_output(fake_client, creds, tmp_path, monkeypatch):
     fake_client.cluster_resources.return_value = []
     fake_client.storage_content.return_value = []
     fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
-    r = inv(["--no-json", "--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+    r = inv(["--no-json", "--dangerous", "vm", "up", "web", "--no-agent-template", "--image", "ubuntu-24.04", "--node", "pve1",
              "--ssh-key", str(key), "--ciuser", "ubuntu"], _net_creds(creds))
     assert r.exit_code == 0, r.output
     out = plain(r.output)
@@ -1719,7 +1719,7 @@ def test_vm_up_dry_run_does_not_generate_key(fake_client, creds, tmp_path, monke
     fake_client.cluster_resources.return_value = []
     fake_client.storage_content.return_value = []
     missing = tmp_path / "newkey.pub"
-    r = inv(["--dry-run", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+    r = inv(["--dry-run", "vm", "up", "web", "--no-agent-template", "--image", "ubuntu-24.04", "--node", "pve1",
              "--ssh-key", str(missing)], _net_creds(creds))
     assert r.exit_code == 0, r.output
     assert json.loads(r.output)["op"] == "qemu.up"
@@ -1735,7 +1735,7 @@ def test_vm_up_readonly_does_not_generate_key(fake_client, creds, tmp_path, monk
     fake_client.cluster_resources.return_value = []
     fake_client.storage_content.return_value = []
     missing = tmp_path / "newkey.pub"
-    r = inv(["vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+    r = inv(["vm", "up", "web", "--no-agent-template", "--image", "ubuntu-24.04", "--node", "pve1",
              "--ssh-key", str(missing)], _net_creds(creds))  # no --dangerous -> exit 4
     assert r.exit_code == 4, r.output
     assert calls == []            # gate blocked BEFORE any key generation
@@ -1850,7 +1850,7 @@ def test_vm_up_json_envelope_dhcp_hint(fake_client, creds, tmp_path, monkeypatch
     fake_client.list_storage.return_value = _IMPORT_STORAGES
     fake_client.storage_content.return_value = []
     fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
-    r = inv(["--json", "--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+    r = inv(["--json", "--dangerous", "vm", "up", "web", "--no-agent-template", "--image", "ubuntu-24.04", "--node", "pve1",
              "--ssh-key", str(key)], creds)
     assert r.exit_code == 0, r.output
     payload = json.loads(r.output)
@@ -2344,7 +2344,7 @@ def test_vm_up_dhcp_hint_mentions_arp(fake_client, creds, tmp_path, monkeypatch)
     fake_client.list_storage.return_value = _IMPORT_STORAGES
     fake_client.storage_content.return_value = []
     fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
-    r = inv(["--json", "--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04",
+    r = inv(["--json", "--dangerous", "vm", "up", "web", "--no-agent-template", "--image", "ubuntu-24.04",
              "--node", "pve1", "--ssh-key", str(key)], creds)
     assert r.exit_code == 0, r.output
     hint = json.loads(r.output)["hint"]
@@ -2407,13 +2407,13 @@ def test_vm_up_ip_dhcp_reports_null_ip(fake_client, creds, tmp_path, monkeypatch
     fake_client.storage_content.return_value = []
     fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
     # pool IS configured, but an explicit --ip dhcp must win and skip allocation
-    r = inv(["--json", "--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+    monkeypatch.setattr(cli.ipam, "allocate_ip", lambda *a, **k: pytest.fail("allocation attempted"))
+    r = inv(["--json", "--dangerous", "vm", "up", "web", "--no-agent-template", "--image", "ubuntu-24.04", "--node", "pve1",
              "--ip", "dhcp", "--ssh-key", str(key)], _net_creds(creds))
     assert r.exit_code == 0, r.output
     out = json.loads(r.output)
     assert out["ip"] is None  # NOT the string "dhcp"
     assert out["ssh"] is None
-    fake_client.cluster_resources.assert_not_called()
     assert fake_client.create_guest.call_args.kwargs["ipconfig0"] == "ip=dhcp"
 
 
@@ -2475,7 +2475,7 @@ def test_vm_up_multiple_ssh_keys(fake_client, creds, tmp_path, monkeypatch):
     fake_client.list_storage.return_value = _IMPORT_STORAGES
     fake_client.storage_content.return_value = []
     fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
-    r = inv(["--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+    r = inv(["--dangerous", "vm", "up", "web", "--no-agent-template", "--image", "ubuntu-24.04", "--node", "pve1",
              "--ssh-key", str(a), "--ssh-key", str(b)], creds)
     assert r.exit_code == 0, r.output
     sshkeys = fake_client.create_guest.call_args.kwargs["sshkeys"]
@@ -2643,7 +2643,7 @@ def test_vm_up_plan_failure_envelope_has_recovery_context(fake_client, creds, tm
     fake_client.create_guest.return_value = "UPID:create"
     fake_client.guest_power.side_effect = RuntimeError("start exploded")
     fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "OK"}
-    r = inv(["--json", "--dangerous", "vm", "up", "web", "--image", "ubuntu-24.04", "--node", "pve1",
+    r = inv(["--json", "--dangerous", "vm", "up", "web", "--no-agent-template", "--image", "ubuntu-24.04", "--node", "pve1",
              "--ssh-key", str(key)], creds)
     assert r.exit_code == 1, r.output
     payload = json.loads(r.output)
