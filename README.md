@@ -12,9 +12,7 @@ cluster, built so an AI agent can drive it safely.
 JSON for machines. It is **read-only by default**: nothing changes without
 `--dangerous`, and nothing is destroyed without `--dangerous` and `--yes`.
 
-<!-- TODO: record the demo and uncomment:
-![pmox demo](docs/demo.gif)
--->
+![pmox demo](https://raw.githubusercontent.com/lukebward/pmox/main/docs/demo.gif)
 
 ```
 pmox health

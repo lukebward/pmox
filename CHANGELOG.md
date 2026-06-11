@@ -6,6 +6,11 @@ All notable changes to pmox are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- README demo GIF recorded and embedded (`docs/demo.gif`, rebuilt from
+  `docs/demo.cast` via `scripts/gen_demo_cast.py` + `agg`).
+
 ## [0.7.0] - 2026-06-10
 
 One-shot agent-backed VMs: the first `vm up --image X` builds a golden
