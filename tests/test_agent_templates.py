@@ -245,6 +245,32 @@ def test_template_build_dhcp_with_mac_needs_no_discovery(fake_client, creds, tmp
     assert candidates and all(c.startswith("fe80::") for c in candidates)
 
 
+def test_template_build_dhcp_falls_back_to_discovery_when_link_local_dead(fake_client, creds, tmp_path, build_edges, monkeypatch):
+    """IPv6-disabled host: link-local candidates fail, so a DHCP build discovers
+    the IPv4 address and retries — instead of giving up."""
+    _wire_build_client(fake_client)
+    build_edges.establish_agent_ssh.side_effect = [RuntimeError("all link-local dead"), "192.168.0.77"]
+    monkeypatch.setattr(cli, "_wait_for_ip", lambda *a, **k: {"primary": "192.168.0.77"})
+    r = inv(["--json", "--dangerous", "template", "build", "ubuntu-24.04", "--node", "pve1",
+             "--ssh-key", _keypair(tmp_path)], creds)
+    assert r.exit_code == 0, r.output
+    assert build_edges.establish_agent_ssh.call_count == 2
+    assert build_edges.establish_agent_ssh.call_args.args[1] == ["192.168.0.77"]
+
+
+def test_template_build_static_failure_does_not_retry_via_discovery(fake_client, creds, tmp_path, build_edges, monkeypatch):
+    """With a static bootstrap address, discovery would just re-find the same
+    address — the original failure propagates."""
+    _wire_build_client(fake_client)
+    build_edges.establish_agent_ssh.side_effect = RuntimeError("unreachable")
+    monkeypatch.setattr(cli, "_wait_for_ip",
+                        lambda *a, **k: pytest.fail("discovery should not run for static builds"))
+    r = inv(["--json", "--dangerous", "template", "build", "ubuntu-24.04", "--node", "pve1",
+             "--ip", "192.168.0.198/24,gw=192.168.0.1", "--ssh-key", _keypair(tmp_path)], creds)
+    assert r.exit_code == 1, r.output
+    assert json.loads(r.output)["failed_step"] == "install agent"
+
+
 def test_template_build_reuses_existing(fake_client, creds, tmp_path, build_edges):
     _wire_build_client(fake_client)
     fake_client.cluster_resources.return_value = [dict(TPL_ROW)]

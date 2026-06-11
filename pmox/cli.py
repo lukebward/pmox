@@ -2003,16 +2003,24 @@ def _agent_template_build(
     def _install():
         # Transport order is deliberate: MAC-derived IPv6 link-local first (a pure
         # function of the config — NDP resolution, immune to ARP spoofing and DHCP
-        # state), then the static IPv4 we assigned, then DHCP discovery only when
-        # neither exists. Nothing here relies on ARP.
+        # state), then the static IPv4 we assigned. DHCP discovery is the last
+        # resort, reached only when nothing else can (no candidates at all, or
+        # every link-local scope is dead — e.g. IPv6 disabled on this host).
         mac = next((m for _, m in arp.extract_macs(client.guest_config(node, "qemu", target_vmid))), None)
         candidates = guestops.link_local_candidates(mac) if mac else []
         if boot_ip:
             candidates.append(boot_ip)
-        if not candidates:
-            scan = arp.ScanConfig(cidr=settings.net_cidr, host=settings.host, port=settings.port or 8006)
-            candidates = [_wait_for_ip(ctx, client, "qemu", target_vmid, node, scan)["primary"]]
-        guestops.establish_agent_ssh(login_user, candidates, priv_key)
+        try:
+            if not candidates:
+                raise RuntimeError("the guest config exposes no MAC and no static address was assigned")
+            guestops.establish_agent_ssh(login_user, candidates, priv_key)
+            return
+        except RuntimeError:
+            if static_boot:
+                raise  # discovery would only re-find the same static address
+        scan = arp.ScanConfig(cidr=settings.net_cidr, host=settings.host, port=settings.port or 8006)
+        primary = _wait_for_ip(ctx, client, "qemu", target_vmid, node, scan)["primary"]
+        guestops.establish_agent_ssh(login_user, [primary], priv_key)
 
     def _shutdown():
         upid = client.guest_power(node, "qemu", target_vmid, action="shutdown")
