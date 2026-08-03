@@ -5,12 +5,17 @@
 [![Python](https://img.shields.io/pypi/pyversions/pmox)](https://pypi.org/project/pmox/)
 [![License](https://img.shields.io/pypi/l/pmox)](LICENSE)
 
+**Status:** alpha. Commands and flags can change before 1.0.
+
 A command-line tool that explores and manages a [Proxmox VE](https://www.proxmox.com/)
 cluster, built so an AI agent can drive it safely.
 
 `pmox` wraps the Proxmox API with concise commands, pretty tables for humans, and
 JSON for machines. It is **read-only by default**: it changes nothing without
 `--dangerous`, and it destroys nothing without `--dangerous` and `--yes`.
+
+Docs: [Commands](docs/commands.md) · [Configuration](docs/configuration.md) ·
+[Provisioning](docs/provisioning.md) · or run `pmox guide`.
 
 ![pmox demo](https://raw.githubusercontent.com/lukebward/pmox/main/docs/demo.gif)
 
@@ -24,6 +29,22 @@ pmox --dangerous vm up web --image ubuntu-24.04 --wait
 pmox --dangerous vm start 100
 pmox --dangerous vm delete 100 --yes
 ```
+
+## Why pmox
+
+- `qm`, `pct`, and `pvesh` need a root shell on a Proxmox node. pmox needs one
+  scoped API token and runs from any machine on your network.
+- MCP servers add a process to run and configure. pmox is a plain CLI: anything
+  with shell access can drive it, and the JSON envelopes make it easy to wrap
+  in an MCP server if you prefer.
+- An AI agent gets guardrails by default: read-only mode until `--dangerous`,
+  confirmation for destructive commands, stable error codes, and a built-in
+  guide (`pmox guide`).
+
+pmox is not for everything:
+
+- Use Terraform or Ansible when you want declarative state.
+- Use `pvesh` when you need an API endpoint pmox does not cover.
 
 ## Quick start
 
@@ -94,11 +115,6 @@ Point the agent at the CLI and let it run commands through the shell:
 - When you want changes, say so explicitly and have it add the flags:
   `pmox --dangerous vm start 100`.
 
-There is no MCP server to run: anything with shell access can drive pmox, and
-the JSON envelopes make it easy to wrap in one if you prefer. Unlike `qm` or
-`pvesh`, pmox needs no root shell on a node: just a scoped API token, from any
-machine on your network.
-
 ### Claude Code plugin
 
 This repo is also a Claude Code plugin ([`plugin/`](plugin/)) that teaches
@@ -112,6 +128,30 @@ Claude the safety rules:
 It adds a `proxmox` skill that activates when you ask about your cluster, plus
 `/pmox:cluster-status`, `/pmox:list-guests`, and `/pmox:run`. Install the CLI
 first (`pip install pmox`). Permission details: [`plugin/README.md`](plugin/README.md).
+
+## Commands
+
+The most-used commands. The full reference, global flags, and exit codes live
+in [docs/commands.md](docs/commands.md):
+
+```
+pmox health                           cluster health triage
+pmox guide                            the built-in agent guide
+pmox vm list / ct list                all guests, cluster-wide
+pmox vm describe 100                  status + config + snapshots + tasks
+pmox vm ip 100 --wait                 live IP: agent, cloud-init config, or ARP
+pmox template build ubuntu-24.04      agent golden template      (--dangerous)
+pmox template list                    templates, agent ones marked
+pmox vm set 100 -o cores=4            edit config                (--dangerous)
+pmox vm snapshot create 100 pre       snapshots                  (--dangerous)
+pmox vm start 100                     also shutdown/reboot/...   (--dangerous)
+pmox vm stop 100 --yes                also delete/reset/...      (--dangerous)
+pmox storage list / task list / image list
+```
+
+`ct` mirrors `vm` for containers. You rarely need `--node`: pmox resolves it
+from the VMID, the UPID, or the cluster. Add `--dry-run` to any change to
+preview the exact API call without making it.
 
 ## Provisioning
 
@@ -154,30 +194,6 @@ Sizing profiles: `small` 1 core / 1 GiB · `medium` 2 / 4 · `large` 4 / 8.
 Static addresses via `--ip <cidr>,gw=<ip>` or a `[network]` pool in config.
 Image checksum verification is opt-in (`image pull --checksum sha256:<hex>`).
 
-## Commands
-
-The most-used commands. The full reference, global flags, and exit codes live
-in [docs/commands.md](docs/commands.md):
-
-```
-pmox health                           cluster health triage
-pmox guide                            the built-in agent guide
-pmox vm list / ct list                all guests, cluster-wide
-pmox vm describe 100                  status + config + snapshots + tasks
-pmox vm ip 100 --wait                 live IP: agent, cloud-init config, or ARP
-pmox template build ubuntu-24.04      agent golden template      (--dangerous)
-pmox template list                    templates, agent ones marked
-pmox vm set 100 -o cores=4            edit config                (--dangerous)
-pmox vm snapshot create 100 pre       snapshots                  (--dangerous)
-pmox vm start 100                     also shutdown/reboot/...   (--dangerous)
-pmox vm stop 100 --yes                also delete/reset/...      (--dangerous)
-pmox storage list / task list / image list
-```
-
-`ct` mirrors `vm` for containers. You rarely need `--node`: pmox resolves it
-from the VMID, the UPID, or the cluster. Add `--dry-run` to any change to
-preview the exact API call without making it.
-
 ## Development
 
 The test suite mocks the Proxmox API, so you need no live cluster:
@@ -207,6 +223,12 @@ pmox/
   cli.py         Typer app wiring it all together
 ```
 
+## Support and contributing
+
+Questions and bug reports: [open an issue](https://github.com/lukebward/pmox/issues).
+Pull requests are welcome; run `pytest` first. Release history lives in the
+[changelog](CHANGELOG.md).
+
 ## License
 
-[MIT](LICENSE) © 2026 Luke Ward · [Changelog](CHANGELOG.md)
+[MIT](LICENSE) © 2026 Luke Ward
