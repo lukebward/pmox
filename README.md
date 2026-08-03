@@ -1,16 +1,16 @@
 # pmox
-(AI Assistance was used in contribution to this project)
+(AI tools helped build this project)
 
 [![PyPI](https://img.shields.io/pypi/v/pmox)](https://pypi.org/project/pmox/)
 [![Python](https://img.shields.io/pypi/pyversions/pmox)](https://pypi.org/project/pmox/)
 [![License](https://img.shields.io/pypi/l/pmox)](LICENSE)
 
-A command-line tool for exploring and managing a [Proxmox VE](https://www.proxmox.com/)
+A command-line tool that explores and manages a [Proxmox VE](https://www.proxmox.com/)
 cluster, built so an AI agent can drive it safely.
 
 `pmox` wraps the Proxmox API with concise commands, pretty tables for humans, and
-JSON for machines. It is **read-only by default**: nothing changes without
-`--dangerous`, and nothing is destroyed without `--dangerous` and `--yes`.
+JSON for machines. It is **read-only by default**: it changes nothing without
+`--dangerous`, and it destroys nothing without `--dangerous` and `--yes`.
 
 ![pmox demo](https://raw.githubusercontent.com/lukebward/pmox/main/docs/demo.gif)
 
@@ -27,7 +27,7 @@ pmox --dangerous vm delete 100 --yes
 
 ## Quick start
 
-Requires Python 3.11+, Proxmox VE 8.x, and an API token.
+pmox requires Python 3.11+, Proxmox VE 8.x, and an API token.
 
 ```bash
 pip install pmox
@@ -35,8 +35,8 @@ pip install pmox
 
 Create the token in Proxmox under *Datacenter → Permissions → API Tokens* (for a
 homelab, uncheck "Privilege Separation" so it inherits the user's permissions).
-Put the connection details in a `.env` file where you run pmox — or a TOML file,
-environment variables, or flags ([docs/configuration.md](docs/configuration.md)):
+Put the connection details in a `.env` file where you run pmox, or use a TOML
+file, environment variables, or flags ([docs/configuration.md](docs/configuration.md)):
 
 ```ini
 PROXMOX_HOST=192.168.1.10
@@ -55,11 +55,11 @@ ssh ubuntu@<ip>
 ```
 
 The first `vm up` per image takes a few minutes: it builds a golden template
-with `qemu-guest-agent` baked in, then clones it. Every later `vm up` clones
-in seconds, and `vm ip` gets its answer from the guest agent — no scans, no
+that includes `qemu-guest-agent`, then clones it. Every later `vm up` clones
+in seconds, and `vm ip` gets its answer from the guest agent: no scans, no
 guessing. On a multi-node cluster add `--node <name>`; cloud-image
-provisioning needs PVE 8.2+ and a storage with the `import` content type. Tear
-the VM down again with `pmox --dangerous vm delete <vmid> --yes`.
+provisioning needs PVE 8.2+ and a storage with the `import` content type.
+Delete the VM again with `pmox --dangerous vm delete <vmid> --yes`.
 
 ## Safety model
 
@@ -67,37 +67,37 @@ Two independent gates protect the cluster:
 
 | Gate | Flag | Applies to | Default |
 |------|------|-----------|---------|
-| Dangerous mode | `--dangerous` (or `PMOX_DANGEROUS=1`) | any state change: power, create, edit, clone, migrate, snapshot | off — read-only |
+| Dangerous mode | `--dangerous` (or `PMOX_DANGEROUS=1`) | any state change: power, create, edit, clone, migrate, snapshot | off (read-only) |
 | Confirmation | `--yes` | destructive ops: `delete`, `stop`, `reset`, `migrate`, `rollback`, snapshot `delete`, `set` with a `delete=` key | required when non-interactive |
 
 `--dangerous` is global; `--yes` belongs to the subcommand and goes after it:
 `pmox --dangerous vm delete 100 --yes`.
 
-When run non-interactively (e.g. by an agent), a destructive command without
-`--yes` is refused rather than left hanging at a prompt. Failures come back as
-JSON envelopes with stable error codes, successes carry machine-readable fields
-(`vmid`, `upid`, ...), and the exit code distinguishes "needs `--dangerous`" (4)
-from "needs `--yes`" (3) — see [docs/commands.md](docs/commands.md) or run
+When pmox runs non-interactively (e.g. under an agent), it refuses a destructive
+command without `--yes` instead of waiting at a prompt. Failures come back as
+JSON envelopes with stable error codes, and successes carry machine-readable
+fields (`vmid`, `upid`, ...). The exit code distinguishes "needs `--dangerous`"
+(4) from "needs `--yes`" (3); see [docs/commands.md](docs/commands.md) or run
 `pmox guide`.
 
 ## Using with an AI agent
 
 Point the agent at the CLI and let it run commands through the shell:
 
-- pmox detects when its output is captured and emits JSON automatically — the
-  agent parses structure while you still see tables at your own terminal.
+- pmox emits JSON automatically when something captures its output: the agent
+  parses structure while you still see tables at your own terminal.
 - Tell the agent to run `pmox guide` first: the complete guide (safety model,
   envelopes, recipes, recovery) in one call, so it onboards itself without a
   plugin.
 - Leave dangerous mode off while it explores. Without `--dangerous` (and
   `--yes` for destructive ops) the agent cannot change anything.
-- When you want changes made, say so explicitly and have it add the flags:
+- When you want changes, say so explicitly and have it add the flags:
   `pmox --dangerous vm start 100`.
 
-There is no MCP server to run — anything with shell access can drive pmox, and
-the JSON envelopes make it straightforward to wrap in one if you prefer. Unlike
-`qm` or `pvesh`, it needs no root shell on a node: just a scoped API token,
-from any machine on your network.
+There is no MCP server to run: anything with shell access can drive pmox, and
+the JSON envelopes make it easy to wrap in one if you prefer. Unlike `qm` or
+`pvesh`, pmox needs no root shell on a node: just a scoped API token, from any
+machine on your network.
 
 ### Claude Code plugin
 
@@ -121,18 +121,18 @@ One command from cloud image to SSH-able, agent-backed VM:
 pmox --dangerous vm up web --image ubuntu-24.04 --wait
 ```
 
-pmox downloads (and caches) the image, picks storage, injects your SSH key
-(generating one if needed), and boots with DHCP. On the first run per image it
-also builds an **agent golden template**: a one-time VM that gets
-`qemu-guest-agent` installed over SSH, is cleaned for cloning, and is converted
-to a tagged template. Every `vm up --image` after that clones the template, so
-`pmox vm ip <vmid> --wait` is answered by the guest agent — reliably, on any
-network. Build it explicitly (or with a static bootstrap address) via
+pmox downloads (and caches) the image, picks storage, injects your SSH key (it
+generates one if needed), and boots with DHCP. On the first run per image it
+also builds an **agent golden template**: a one-time VM where pmox installs
+`qemu-guest-agent` over SSH, cleans it up, and converts it to a tagged
+template. Every `vm up --image` after that clones the template, so the guest
+agent answers `pmox vm ip <vmid> --wait` reliably, on any network. Build the
+template explicitly (or with a static bootstrap address) via
 `pmox --dangerous template build ubuntu-24.04`; opt out with
 `--no-agent-template` or `agent_templates = false`.
 
-The other modes — details and walkthroughs in
-[docs/provisioning.md](docs/provisioning.md):
+The other modes (details and walkthroughs in
+[docs/provisioning.md](docs/provisioning.md)):
 
 ```bash
 # Fully specified cloud-init VM:
@@ -156,7 +156,7 @@ Image checksum verification is opt-in (`image pull --checksum sha256:<hex>`).
 
 ## Commands
 
-The most-used commands — the full reference, global flags, and exit codes live
+The most-used commands. The full reference, global flags, and exit codes live
 in [docs/commands.md](docs/commands.md):
 
 ```
@@ -174,13 +174,13 @@ pmox vm stop 100 --yes                also delete/reset/...      (--dangerous)
 pmox storage list / task list / image list
 ```
 
-`ct` mirrors `vm` for containers. `--node` is rarely needed — pmox resolves it
+`ct` mirrors `vm` for containers. You rarely need `--node`: pmox resolves it
 from the VMID, the UPID, or the cluster. Add `--dry-run` to any change to
 preview the exact API call without making it.
 
 ## Development
 
-The test suite mocks the Proxmox API — no live cluster required:
+The test suite mocks the Proxmox API, so you need no live cluster:
 
 ```bash
 git clone https://github.com/lukebward/pmox.git && cd pmox
