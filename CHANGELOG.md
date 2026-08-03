@@ -6,8 +6,16 @@ All notable changes to pmox are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-08-03
+
+Docs-only release: a clearer README on GitHub and PyPI.
+
 ### Changed
 
+- README rewritten in simple active wording, with the em dashes removed.
+- README restructured: an alpha status note, a docs quick-links line, a
+  "Why pmox" section with honest alternatives, Commands moved above
+  Provisioning, and a new "Support and contributing" section.
 - README demo GIF recorded and embedded (`docs/demo.gif`, rebuilt from
   `docs/demo.cast` via `scripts/gen_demo_cast.py` + `agg`).
 
@@ -254,7 +262,9 @@ Initial release.
 - Claude Code plugin (`plugin/`) with a `proxmox` skill and the
   `/pmox:cluster-status`, `/pmox:list-guests`, and `/pmox:run` commands.
 
-[Unreleased]: https://github.com/lukebward/pmox/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/lukebward/pmox/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/lukebward/pmox/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/lukebward/pmox/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/lukebward/pmox/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/lukebward/pmox/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/lukebward/pmox/compare/v0.3.0...v0.4.0
