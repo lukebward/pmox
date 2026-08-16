@@ -6,6 +6,8 @@
 [![Docs](https://img.shields.io/badge/docs-lukebward.github.io%2Fpmox-blue)](https://lukebward.github.io/pmox/)
 [![License](https://img.shields.io/pypi/l/pmox)](LICENSE)
 
+📖 **[Documentation](https://lukebward.github.io/pmox/)** · [Quick start](https://lukebward.github.io/pmox/quick-start/) · [Commands](https://lukebward.github.io/pmox/commands/) · [Safety model](https://lukebward.github.io/pmox/safety/) · [Provisioning](https://lukebward.github.io/pmox/provisioning/)
+
 **Status:** alpha. Commands and flags can change before 1.0.
 
 A command-line tool that explores and manages a [Proxmox VE](https://www.proxmox.com/)
@@ -15,8 +17,8 @@ cluster, built so an AI agent can drive it safely.
 JSON for machines. It is **read-only by default**: it changes nothing without
 `--dangerous`, and it destroys nothing without `--dangerous` and `--yes`.
 
-Docs: [Commands](https://lukebward.github.io/pmox/commands/) · [Configuration](https://lukebward.github.io/pmox/configuration/) ·
-[Provisioning](https://lukebward.github.io/pmox/provisioning/) · [Safety model](https://lukebward.github.io/pmox/safety/) · or run `pmox guide`.
+Agents can self-onboard with `pmox guide` — the whole safety model and
+recipes in one call.
 
 ![pmox demo](https://raw.githubusercontent.com/lukebward/pmox/main/docs/demo.gif)
 
