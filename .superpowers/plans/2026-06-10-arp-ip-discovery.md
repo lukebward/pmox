@@ -4,7 +4,7 @@
 
 **Goal:** `pmox vm ip` resolves agent-less DHCP VMs by matching the guest's MAC against the local ARP table (with a UDP nudge sweep on miss), as a third source after guest-agent and static config.
 
-**Architecture:** New pure-ish module `pmox/arp.py` (parsing core pure; subprocess/socket edges are module functions tests monkeypatch). `views.guest_ip_addresses` gains a `scan: Optional[arp.ScanConfig]` parameter and tries ARP last, only when `scan` is provided and kind is qemu. The CLI builds `ScanConfig` from settings for the `vm ip` path only; `describe` never scans. Spec: `docs/superpowers/specs/2026-06-10-arp-ip-discovery-design.md`.
+**Architecture:** New pure-ish module `pmox/arp.py` (parsing core pure; subprocess/socket edges are module functions tests monkeypatch). `views.guest_ip_addresses` gains a `scan: Optional[arp.ScanConfig]` parameter and tries ARP last, only when `scan` is provided and kind is qemu. The CLI builds `ScanConfig` from settings for the `vm ip` path only; `describe` never scans. Spec: `.superpowers/specs/2026-06-10-arp-ip-discovery-design.md`.
 
 **Tech Stack:** Python 3.11+ stdlib only (`ipaddress`, `socket`, `subprocess`, `re`). pytest with the project's 100% coverage gate (`.venv\Scripts\python.exe -m pytest`; use `--no-cov` for subset runs).
 

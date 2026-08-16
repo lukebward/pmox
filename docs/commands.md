@@ -5,8 +5,11 @@ flag. Destructive operations additionally need `--yes`, which is a
 per-subcommand flag and goes after the subcommand:
 `pmox --dangerous vm delete 100 --yes`.
 
-`pmox guide` prints the agent-oriented version of this page (safety model,
-envelopes, recipes, recovery) in one call.
+!!! abstract "The full contract lives in [Safety model](safety.md)"
+
+    Exit codes, the six error codes, and the JSON envelope shapes are documented
+    there. `pmox guide` prints the agent-oriented version of all of it in one
+    call.
 
 ## All commands
 
@@ -55,11 +58,55 @@ pmox image pull <name|url> --storage S --node N [--as-template | --checksum sha2
 
 pmox template list [--node N]        VM templates cluster-wide; agent ones marked
 pmox template build <image> [--ip <cidr>,gw=<ip>] [--user U] [--vmid N] [--name X]
-                                     agent golden template (needs --dangerous; see docs/provisioning.md)
+                                     agent golden template (needs --dangerous)
 ```
 
 `--as-template` and `--checksum` don't combine — verify the checksum on a plain
 pull first; the cached image is then reused by later provisioning commands.
+`template build` is covered in depth under [Provisioning](provisioning.md#agent-templates-template-build).
+
+## Two output modes
+
+Every command emits Rich tables at a terminal and JSON when its output is
+captured or piped. Nothing about the command changes — only the rendering.
+
+=== "At a terminal"
+
+    ```console
+    $ pmox vm ip 113 --wait
+    VM 113 (web) on lukeserver · primary 192.168.0.140
+    ┌───────────┬───────────────┬──────┐
+    │ Interface │ IPv4          │ IPv6 │
+    ├───────────┼───────────────┼──────┤
+    │ eth0      │ 192.168.0.140 │ -    │
+    └───────────┴───────────────┴──────┘
+    ```
+
+=== "Captured or piped"
+
+    ```json
+    {
+      "vmid": 113,
+      "node": "lukeserver",
+      "kind": "qemu",
+      "name": "web",
+      "source": "guest-agent",
+      "primary": "192.168.0.140",
+      "interfaces": [
+        {
+          "name": "eth0",
+          "mac": "bc:24:11:aa:bb:cc",
+          "addresses": [
+            {"family": "ipv4", "address": "192.168.0.140", "prefix": 24, "scope": "global"}
+          ]
+        }
+      ]
+    }
+    ```
+
+Force one or the other with `--json` / `--no-json`, or `PMOX_JSON=1|0|auto`.
+The table view hides loopback and IPv6 link-local addresses unless you pass
+`--all`; JSON always carries every interface and address.
 
 ## Conventions
 
@@ -70,68 +117,25 @@ corrective command. List commands accept `--fields vmid,name,status` to trim
 output to just those keys.
 
 Global flags are position-independent — they work before or after the
-subcommand: `--json/--no-json`, `--dangerous/--no-dangerous`, `--wait/--no-wait`,
+subcommand:
+
+`--json/--no-json`, `--dangerous/--no-dangerous`, `--wait/--no-wait`,
 `--timeout <s>` (default 600), `--dry-run`, `--host`, `--port`, `--token-id`,
 `--token-secret`, `--verify-ssl/--no-verify-ssl`, `--config`.
 
 Provisioning commands always wait on their internal steps; if a wait times out,
-resume with `pmox task wait <upid>`. `PMOX_DANGEROUS=1` is honored from the
-real environment only — never from a `.env` file — and `--no-dangerous` forces
-read-only regardless.
+resume with `pmox task wait <upid>`.
+
+!!! warning "`PMOX_DANGEROUS=1` comes from the real environment only"
+
+    Never from a `.env` file. `--no-dangerous` forces read-only regardless.
 
 `vm up --image` rides agent templates by default: it clones the image's
 template when present and builds it first when missing (see
-[docs/provisioning.md](provisioning.md)). `--no-agent-template` forces a raw
+[Provisioning](provisioning.md)). `--no-agent-template` forces a raw
 image import for one call; `PMOX_AGENT_TEMPLATES=0` or
 `[defaults] agent_templates = false` disables the behavior entirely.
 
 `--dry-run` prints the exact API call as JSON and makes zero mutations, but it
 still performs read calls to resolve nodes and VMIDs, so cluster connectivity
 is required.
-
-## Exit codes
-
-| Code | Meaning |
-|------|---------|
-| 0 | success |
-| 1 | error or network failure |
-| 2 | config missing **or** CLI usage error (the envelope's `error` field tells them apart) |
-| 3 | operation needs `--yes` |
-| 4 | operation needs `--dangerous` |
-
-## JSON envelopes
-
-Under `--json` (or whenever output is captured), errors are a structured
-envelope:
-
-```json
-{"ok": false, "error": "read_only", "need": ["--dangerous"], "message": "..."}
-```
-
-`error` is one of six fixed codes:
-
-| Code | Exit | Meaning |
-|------|------|---------|
-| `read_only` | 4 | needs `--dangerous` |
-| `confirm_required` | 3 | needs `--yes` |
-| `config` | 2 | credentials not configured / config file invalid |
-| `usage` | 2 | bad command line (typo'd flag or subcommand) |
-| `network` | 1 | can't reach the Proxmox API (DNS/TLS/timeout) |
-| `error` | 1 | general error |
-
-Envelopes carry machine-actionable fields where relevant: task failures include
-`upid` and `node` plus a `hint` (resume with `pmox task wait <upid>`); partial
-provisioning failures include `vmid`, `completed_steps`, and `failed_step`. A
-guest that was already created is not cleaned up — follow the `hint` rather
-than blindly retrying, or a second guest will be created.
-
-Successful mutations return structured results — the created VMID is always a
-field, never just prose:
-
-```json
-{"ok": true, "op": "qemu.up", "vmid": 112, "node": "pve1", "name": "web",
- "ip": null, "ssh": null, "hint": "..."}
-```
-
-With `--wait`, the `upid` is replaced by a `task` object holding the final task
-status.

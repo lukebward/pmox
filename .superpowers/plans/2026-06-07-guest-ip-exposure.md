@@ -699,7 +699,7 @@ Expected: help text shows the `--all/-a` and `--node/-n` options; exit 0.
 
 ## Self-Review
 
-**1. Spec coverage** (`docs/superpowers/specs/2026-06-07-guest-ip-exposure-design.md`):
+**1. Spec coverage** (`.superpowers/specs/2026-06-07-guest-ip-exposure-design.md`):
 - §3.1 client methods → Task 1. ✓
 - §4 normalization (`guest_ip_addresses`, `_addr_scope`, `_locate_guest`, parsers, `primary`) → Task 2. ✓
 - §4.1 describe embed with uniform `available` flag → Task 3. ✓

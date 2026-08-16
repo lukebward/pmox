@@ -1,0 +1,120 @@
+site_name: pmox
+site_url: https://lukebward.github.io/pmox/
+site_description: >-
+  A CLI for exploring and managing a Proxmox VE cluster, built so AI agents can
+  drive it safely. Read-only by default.
+site_author: Luke Ward
+copyright: MIT © 2026 Luke Ward
+
+repo_url: https://github.com/lukebward/pmox
+repo_name: lukebward/pmox
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  icon:
+    logo: material/server-network
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep orange
+      accent: deep orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep orange
+      accent: deep orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+  features:
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.tooltips
+    - content.action.edit
+
+nav:
+  - Home: index.md
+  - Quick start: quick-start.md
+  - Safety model: safety.md
+  - Guides:
+      - Provisioning: provisioning.md
+      - Using with an AI agent: agents.md
+  - Reference:
+      - Commands: commands.md
+      - Configuration: configuration.md
+  - Development: development.md
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.betterem
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+plugins:
+  - search
+
+# Fail the build on a bad cross-reference, not just a bad file path.
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/lukebward/pmox
+      name: pmox on GitHub
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/pmox/
+      name: pmox on PyPI
+
+# Everything under docs/ is published. Design specs and implementation plans
+# live in .superpowers/ at the repo root, deliberately outside this tree.
+exclude_docs: |
+  demo.cast

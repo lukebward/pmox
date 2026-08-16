@@ -3,6 +3,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/pmox)](https://pypi.org/project/pmox/)
 [![Python](https://img.shields.io/pypi/pyversions/pmox)](https://pypi.org/project/pmox/)
+[![Docs](https://img.shields.io/badge/docs-lukebward.github.io%2Fpmox-blue)](https://lukebward.github.io/pmox/)
 [![License](https://img.shields.io/pypi/l/pmox)](LICENSE)
 
 **Status:** alpha. Commands and flags can change before 1.0.
@@ -14,8 +15,8 @@ cluster, built so an AI agent can drive it safely.
 JSON for machines. It is **read-only by default**: it changes nothing without
 `--dangerous`, and it destroys nothing without `--dangerous` and `--yes`.
 
-Docs: [Commands](docs/commands.md) · [Configuration](docs/configuration.md) ·
-[Provisioning](docs/provisioning.md) · or run `pmox guide`.
+Docs: [Commands](https://lukebward.github.io/pmox/commands/) · [Configuration](https://lukebward.github.io/pmox/configuration/) ·
+[Provisioning](https://lukebward.github.io/pmox/provisioning/) · [Safety model](https://lukebward.github.io/pmox/safety/) · or run `pmox guide`.
 
 ![pmox demo](https://raw.githubusercontent.com/lukebward/pmox/main/docs/demo.gif)
 
@@ -57,7 +58,7 @@ pip install pmox
 Create the token in Proxmox under *Datacenter → Permissions → API Tokens* (for a
 homelab, uncheck "Privilege Separation" so it inherits the user's permissions).
 Put the connection details in a `.env` file where you run pmox, or use a TOML
-file, environment variables, or flags ([docs/configuration.md](docs/configuration.md)):
+file, environment variables, or flags ([Configuration](https://lukebward.github.io/pmox/configuration/)):
 
 ```ini
 PROXMOX_HOST=192.168.1.10
@@ -98,7 +99,7 @@ When pmox runs non-interactively (e.g. under an agent), it refuses a destructive
 command without `--yes` instead of waiting at a prompt. Failures come back as
 JSON envelopes with stable error codes, and successes carry machine-readable
 fields (`vmid`, `upid`, ...). The exit code distinguishes "needs `--dangerous`"
-(4) from "needs `--yes`" (3); see [docs/commands.md](docs/commands.md) or run
+(4) from "needs `--yes`" (3); see the [safety model](https://lukebward.github.io/pmox/safety/) or run
 `pmox guide`.
 
 ## Using with an AI agent
@@ -132,7 +133,7 @@ first (`pip install pmox`). Permission details: [`plugin/README.md`](plugin/READ
 ## Commands
 
 The most-used commands. The full reference, global flags, and exit codes live
-in [docs/commands.md](docs/commands.md):
+in the [command reference](https://lukebward.github.io/pmox/commands/):
 
 ```
 pmox health                           cluster health triage
@@ -172,7 +173,7 @@ template explicitly (or with a static bootstrap address) via
 `--no-agent-template` or `agent_templates = false`.
 
 The other modes (details and walkthroughs in
-[docs/provisioning.md](docs/provisioning.md)):
+[the provisioning guide](https://lukebward.github.io/pmox/provisioning/)):
 
 ```bash
 # Fully specified cloud-init VM:

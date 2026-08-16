@@ -7,6 +7,11 @@ pmox reads settings from three places, lowest to highest priority:
    variables already set in the real environment win over `.env` entries)
 3. CLI flags
 
+!!! warning "One setting ignores this order"
+
+    `PMOX_DANGEROUS` is read from the real environment only — never from a
+    `.env` file. See [Safety model](safety.md).
+
 ## API token
 
 Create one in Proxmox under *Datacenter → Permissions → API Tokens*. For full
@@ -15,9 +20,10 @@ management, give the token the privileges it needs — or, for a homelab, unchec
 
 ## `.env`
 
-Copy [`.env.example`](../.env.example) to `.env` next to where you run pmox:
+Copy [`.env.example`](https://github.com/lukebward/pmox/blob/main/.env.example)
+to `.env` next to where you run pmox:
 
-```ini
+```ini title=".env"
 PROXMOX_HOST=192.168.1.10
 PROXMOX_TOKEN_ID=root@pam!pmox
 PROXMOX_TOKEN_SECRET=00000000-0000-0000-0000-000000000000
@@ -28,7 +34,7 @@ PROXMOX_VERIFY_SSL=false
 
 At `~/.config/pmox/config.toml`, or point `--config` / `PMOX_CONFIG` at a path:
 
-```toml
+```toml title="~/.config/pmox/config.toml"
 host = "192.168.1.10"
 port = 8006
 token_id = "root@pam!pmox"

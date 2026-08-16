@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11+, Typer, proxmoxer (mocked in tests), Rich, pytest + pytest-cov.
 
-**Source of truth:** `docs/superpowers/specs/2026-06-06-pmox-agent-native-design.md` (§6.1, §6.2, §6.5, §6.6) — refined by the API research below.
+**Source of truth:** `.superpowers/specs/2026-06-06-pmox-agent-native-design.md` (§6.1, §6.2, §6.5, §6.6) — refined by the API research below.
 
 ## Confirmed API facts this plan relies on (from research)
 
