@@ -3,8 +3,8 @@
 pmox reads settings from three places, lowest to highest priority:
 
 1. a TOML config file
-2. environment variables (a `.env` file in the working directory is loaded;
-   variables already set in the real environment win over `.env` entries)
+2. environment variables (a `.env` file is loaded; variables already set in
+   the real environment win over `.env` entries)
 3. CLI flags
 
 !!! warning "One setting ignores this order"
@@ -20,6 +20,11 @@ management, give the token the privileges it needs — or, for a homelab, unchec
 
 ## `.env`
 
+pmox discovers `.env` by walking up from the current directory (like `git`
+finds `.git`) — not from wherever the package itself is installed, so an
+editable install never leaks a repo's credentials into unrelated directories,
+and a plain `pip install` still honors a `.env` in a parent of your cwd.
+
 Copy [`.env.example`](https://github.com/lukebward/pmox/blob/main/.env.example)
 to `.env` next to where you run pmox:
 
@@ -32,7 +37,11 @@ PROXMOX_VERIFY_SSL=false
 
 ## TOML
 
-At `~/.config/pmox/config.toml`, or point `--config` / `PMOX_CONFIG` at a path:
+At `~/.config/pmox/config.toml`, or point `--config` / `PMOX_CONFIG` at a path.
+The default path is optional — pmox runs fine without it. An explicitly passed
+`--config`/`PMOX_CONFIG` path is different: if that file does not exist, pmox
+exits 2 with a `config` envelope (`Config file not found: <path>`) instead of
+silently ignoring it.
 
 ```toml title="~/.config/pmox/config.toml"
 host = "192.168.1.10"

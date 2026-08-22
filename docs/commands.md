@@ -7,14 +7,14 @@ per-subcommand flag and goes after the subcommand:
 
 !!! abstract "The full contract lives in [Safety model](safety.md)"
 
-    Exit codes, the six error codes, and the JSON envelope shapes are documented
+    Exit codes, the eight error codes, and the JSON envelope shapes are documented
     there. `pmox guide` prints the agent-oriented version of all of it in one
     call.
 
 ## All commands
 
 ```
-pmox version                         Proxmox version of the connected node
+pmox version                         client version + server version if reachable; never fails
 pmox guide                           print the built-in agent/automation guide
 pmox health                          one-shot cluster health triage (read-only)
 pmox nodes list                      nodes + CPU/mem/uptime

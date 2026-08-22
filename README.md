@@ -218,6 +218,7 @@ pmox/
   arp.py         same-LAN ARP discovery for agent-less DHCP guests
   views.py       composite read queries (describe, health, guest IP lookup)
   provision.py   VM / container creation workflows + fail-fast validation
+  guestops.py    SSH-into-guest operations for template build (the only module that reaches inside a guest)
   ipam.py        token-only static IPv4 allocation (cluster config as ledger)
   output.py      Rich tables + plain JSON; byte/uptime/percent formatters
   safety.py      the two gates: require_dangerous() and confirm()

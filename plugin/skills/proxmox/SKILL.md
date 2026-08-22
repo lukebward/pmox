@@ -34,9 +34,10 @@ pmox vm start 100 --dangerous   # identical
 
 **`--yes`/`-y` is *not* a global flag** — it's a per-subcommand confirmation that
 must come **after** the subcommand (e.g. `pmox --dangerous vm delete 100 --yes`,
-never `pmox --dangerous --yes vm delete 100`, which fails with `No such option:
---yes`). Other per-subcommand options (`-n/--node`, `--purge`, `--target`,
-`-o/--option`) likewise go after the subcommand.
+never `pmox --dangerous --yes vm delete 100`, which fails with a JSON
+`{"error": "usage"}` envelope, exit 2, whose `hint` points at `--help`). Other
+per-subcommand options (`-n/--node`, `--purge`, `--target`, `-o/--option`)
+likewise go after the subcommand.
 
 **Exit 2 means config error OR usage error** — check the JSON envelope's
 `error` field. `"config"` → the user hasn't configured credentials: tell them to
@@ -73,7 +74,7 @@ The destructive set is:
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | Error (see the envelope's `error` field: `error` or `network`) |
+| 1 | Error (see the envelope's `error` field: `error`, `network`, `auth`, or `not_found`) |
 | 2 | Config missing **or** CLI usage error (envelope: `config` vs `usage`) |
 | 3 | Operation needs `--yes` |
 | 4 | Operation needs `--dangerous` |
@@ -87,7 +88,7 @@ envelope you can branch on:
 {"ok": false, "error": "read_only", "need": ["--dangerous"], "message": "..."}
 ```
 
-`error` is one of six fixed codes:
+`error` is one of eight fixed codes:
 
 | Code | Exit | Meaning |
 |------|------|---------|
@@ -95,12 +96,16 @@ envelope you can branch on:
 | `confirm_required` | 3 | Operation needs `--yes` |
 | `config` | 2 | Credentials not configured / config file invalid |
 | `usage` | 2 | Bad command line (typo'd flag or subcommand) |
+| `auth` | 1 | API token rejected (401/403) — fix credentials, don't retry |
+| `not_found` | 1 | Guest/node/storage/task lookup found nothing — re-list instead of retrying |
 | `network` | 1 | Can't reach the Proxmox API (DNS/TLS/timeout — often transient) |
 | `error` | 1 | General error |
 
 Check `ok` first. If `ok` is false and a `need` array is present (only for
 `read_only` and `confirm_required`), it lists the flag to add (`--dangerous`
-or `--yes`). Envelopes may carry extra machine-actionable fields:
+or `--yes`). Read commands and `--dry-run` calls return bare data with no
+`ok` key at all — only mutations and errors carry it, so check for its
+presence before checking its value. Envelopes may carry extra machine-actionable fields:
 
 - task failures/timeouts: `upid`, `node`, and a `hint` (e.g. resume with
   `pmox task wait <upid>`).
@@ -349,7 +354,7 @@ set separately.
 ### Inspect (always safe — no flags needed)
 
 ```
-pmox version
+pmox version                             # client + server version; never fails (server: null if unreachable)
 pmox health
 pmox nodes list
 pmox nodes status <node>

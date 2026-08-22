@@ -6,6 +6,42 @@ All notable changes to pmox are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-08-22
+
+### Fixed
+- Parse errors (unknown command/flag, missing argument, misplaced `--yes`) again emit the
+  documented `{"error": "usage"}` JSON envelope with exit 2 — typer >= 0.26 vendors click,
+  and the handler was catching the wrong module's exceptions, leaking Rich tracebacks.
+- Non-numeric `PROXMOX_PORT`/`PROXMOX_TIMEOUT` values raise a config envelope (exit 2)
+  instead of a raw traceback.
+- An explicitly passed `--config`/`PMOX_CONFIG` file that does not exist is now an error
+  instead of being silently ignored.
+- Destructive commands fail fast (exit 3, `need: ["--yes"]`) instead of writing a
+  confirmation prompt into a captured stream and blocking forever.
+- Human output and help text no longer mojibake on cp1252 Windows consoles: streams are
+  reconfigured to UTF-8, help text is ASCII-only, and runtime glyphs degrade gracefully.
+- The human `task list` table shows the full UPID instead of truncating it to 48 chars.
+- `ct snapshot create` no longer advertises `--vmstate`, which the LXC API does not support.
+- `pmox health` guest counts no longer include templates (reported separately).
+
+### Added
+- Error codes `auth` (token rejected — fix credentials, don't retry) and `not_found`
+  (re-list instead of retrying), alongside the existing six.
+- `pmox health` now returns structured `issues` — lost quorum, offline nodes,
+  unavailable storage, and task types whose last 3+ runs all failed — mirrored into
+  `warnings` for existing consumers.
+- Help text for every command (about half were blank), kind-aware for vm vs ct.
+- A tests workflow (GitHub Actions) including a leg with the real `click` package
+  installed — the condition that originally broke the parse-error boundary.
+
+### Changed
+- `.env` discovery now walks up from the current directory, never from the installed
+  package location — an editable install no longer leaks the repo's credentials into
+  unrelated directories, and pip installs finally honor a cwd `.env`.
+- `pmox version` never fails: it always reports the client version and reports the
+  server version best-effort (`{"client": ..., "server": ... | null}`), exit 0.
+- The Claude Code plugin version now tracks the CLI version (was stuck at 0.3.0).
+
 ## [0.7.1] - 2026-08-03
 
 Docs-only release: a clearer README on GitHub and PyPI.
@@ -262,7 +298,8 @@ Initial release.
 - Claude Code plugin (`plugin/`) with a `proxmox` skill and the
   `/pmox:cluster-status`, `/pmox:list-guests`, and `/pmox:run` commands.
 
-[Unreleased]: https://github.com/lukebward/pmox/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/lukebward/pmox/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/lukebward/pmox/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/lukebward/pmox/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/lukebward/pmox/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/lukebward/pmox/compare/v0.5.0...v0.6.0
