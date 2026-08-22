@@ -151,6 +151,22 @@ def test_health_flags_lost_quorum_and_offline_node():
         assert issue["message"] in result["warnings"]
     # offline node's task API is unreachable -- must not be queried
     c.list_tasks.assert_not_called()
+    # full-object equality on the exact binding shape -- "node" is the field most
+    # likely to regress, since quorum_lost uses None while node_offline uses a name
+    quorum_issue = next(i for i in result["issues"] if i["code"] == "quorum_lost")
+    assert quorum_issue == {
+        "code": "quorum_lost",
+        "severity": "critical",
+        "node": None,
+        "message": "cluster has lost quorum",
+    }
+    offline_issue = next(i for i in result["issues"] if i["code"] == "node_offline")
+    assert offline_issue == {
+        "code": "node_offline",
+        "severity": "critical",
+        "node": "pve1",
+        "message": "node pve1 is offline",
+    }
 
 
 def test_health_flags_unavailable_storage():
@@ -168,6 +184,12 @@ def test_health_flags_unavailable_storage():
     issue = next(i for i in result["issues"] if i["code"] == "storage_unavailable")
     assert issue["severity"] == "warning"
     assert issue["message"] in result["warnings"]
+    assert issue == {
+        "code": "storage_unavailable",
+        "severity": "warning",
+        "node": "pve1",
+        "message": "storage backup on pve1 is unknown",
+    }
 
 
 def test_health_flags_repeated_task_failures():
@@ -200,6 +222,62 @@ def test_health_flags_repeated_task_failures():
     assert "aptupdate" in issue["message"]
     assert "pmox task log UPID:" in issue["message"]
     assert issue["message"] in result["warnings"]
+    assert issue == {
+        "code": "task_failures",
+        "severity": "warning",
+        "node": "pve1",
+        "message": "pve1: last 3 aptupdate runs failed; pmox task log UPID:pve1:0004:aptupdate",
+    }
+
+
+def test_health_task_failure_streak_of_two_does_not_fire():
+    c = MagicMock()
+    c.cluster_status.return_value = [
+        {"type": "cluster", "quorate": 1},
+        {"type": "node", "name": "pve1", "online": 1},
+    ]
+    c.list_nodes.return_value = [
+        {"node": "pve1", "status": "online", "cpu": 0, "mem": 0, "maxmem": 10},
+    ]
+    c.cluster_resources.side_effect = lambda type=None: []
+    c.list_tasks.return_value = [
+        {"type": "aptupdate", "status": "stopped", "exitstatus": "unknown error",
+         "starttime": 300, "upid": "UPID:pve1:0003:aptupdate"},
+        {"type": "aptupdate", "status": "stopped", "exitstatus": "unknown error",
+         "starttime": 200, "upid": "UPID:pve1:0002:aptupdate"},
+        {"type": "aptupdate", "status": "stopped", "exitstatus": "OK",
+         "starttime": 100, "upid": "UPID:pve1:0001:aptupdate"},
+    ]
+    result = views.summarize_health(c)
+    assert not any(i["code"] == "task_failures" for i in result["issues"])
+
+
+def test_health_task_failure_streak_with_no_ok_row_still_fires():
+    c = MagicMock()
+    c.cluster_status.return_value = [
+        {"type": "cluster", "quorate": 1},
+        {"type": "node", "name": "pve1", "online": 1},
+    ]
+    c.list_nodes.return_value = [
+        {"node": "pve1", "status": "online", "cpu": 0, "mem": 0, "maxmem": 10},
+    ]
+    c.cluster_resources.side_effect = lambda type=None: []
+    c.list_tasks.return_value = [
+        {"type": "aptupdate", "status": "stopped", "exitstatus": "unknown error",
+         "starttime": 300, "upid": "UPID:pve1:0003:aptupdate"},
+        {"type": "aptupdate", "status": "stopped", "exitstatus": "unknown error",
+         "starttime": 200, "upid": "UPID:pve1:0002:aptupdate"},
+        {"type": "aptupdate", "status": "stopped", "exitstatus": "unknown error",
+         "starttime": 100, "upid": "UPID:pve1:0001:aptupdate"},
+    ]
+    result = views.summarize_health(c)
+    issue = next(i for i in result["issues"] if i["code"] == "task_failures")
+    assert issue == {
+        "code": "task_failures",
+        "severity": "warning",
+        "node": "pve1",
+        "message": "pve1: last 3 aptupdate runs failed; pmox task log UPID:pve1:0003:aptupdate",
+    }
 
 
 def test_health_excludes_templates_from_guest_counts():
