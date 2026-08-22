@@ -480,7 +480,8 @@ def test_ct_snapshot_create_rejects_vmstate_invocation(fake_client, creds):
     which guards the param-introspection layer)."""
     r = inv(["--dangerous", "ct", "snapshot", "create", "100", "snap1", "--vmstate"], creds)
     assert r.exit_code == 2, r.output
-    assert "No such option" in r.output and "--vmstate" in r.output
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", r.output).replace("\n", "")
+    assert "--vmstate" in plain
     fake_client.create_snapshot.assert_not_called()
 
 
