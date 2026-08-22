@@ -651,11 +651,13 @@ def main_callback(
     # cwd .env gets loaded, so a stray project file can't silently enable writes.
     env_dangerous = os.environ.get("PMOX_DANGEROUS")
 
-    # Load a local .env if python-dotenv is available (never fatal).
+    # Load a local .env if python-dotenv is available (never fatal). Discovery
+    # walks up from the *cwd* — never from the installed package location — so
+    # an editable install can't leak the repo's credentials into other dirs.
     try:
-        from dotenv import load_dotenv
+        from dotenv import find_dotenv, load_dotenv
 
-        load_dotenv()
+        load_dotenv(find_dotenv(usecwd=True))
     except Exception:
         pass
 

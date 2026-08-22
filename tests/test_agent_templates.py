@@ -99,8 +99,12 @@ def test_agent_templates_defaults_on():
     assert config.Settings().agent_templates is True
 
 
-def test_agent_templates_env_off():
-    s = config.load_settings(env={"PMOX_AGENT_TEMPLATES": "0"}, config_path=__nonexistent())
+def test_agent_templates_env_off(tmp_path):
+    # An explicit config_path must now exist (pmox 0.7.2 config trust), so use a
+    # real-but-empty file rather than a merely-absent sentinel path.
+    empty = tmp_path / "empty.toml"
+    empty.write_text("")
+    s = config.load_settings(env={"PMOX_AGENT_TEMPLATES": "0"}, config_path=empty)
     assert s.agent_templates is False
 
 
@@ -116,12 +120,6 @@ def test_agent_templates_env_beats_file(tmp_path):
     p.write_text("[defaults]\nagent_templates = false\n")
     s = config.load_settings(env={"PMOX_AGENT_TEMPLATES": "true"}, config_path=p)
     assert s.agent_templates is True
-
-
-def __nonexistent():
-    from pathlib import Path
-
-    return Path("Z:/definitely/not/here/pmox.toml")
 
 
 # ---------------------------------------------------------------- catalog --

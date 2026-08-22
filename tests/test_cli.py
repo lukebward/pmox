@@ -360,7 +360,14 @@ def test_snapshot_rollback(fake_client, creds):
 # ----------------------------------------------------------- config / meta ---
 
 
-def test_missing_credentials_exit2():
+def test_missing_credentials_exit2(tmp_path):
+    # An explicit PMOX_CONFIG must now point at a real file (see
+    # test_explicit_missing_pmox_config_env_errors in test_config.py), so use an
+    # existing-but-empty one -- isolating from any real config on the host while
+    # still exercising the *credentials* validation path (raised from within a
+    # command body's error_boundary, not from load_settings() at startup).
+    empty_config = tmp_path / "empty.toml"
+    empty_config.write_text("")
     r = runner.invoke(
         cli.app,
         ["nodes", "list"],
@@ -368,7 +375,7 @@ def test_missing_credentials_exit2():
             "PROXMOX_HOST": "",
             "PROXMOX_TOKEN_ID": "",
             "PROXMOX_TOKEN_SECRET": "",
-            "PMOX_CONFIG": "/nonexistent-pmox-config.toml",
+            "PMOX_CONFIG": str(empty_config),
         },
     )
     assert r.exit_code == 2, r.output
@@ -464,6 +471,25 @@ def test_callback_dotenv_failure_is_ignored(fake_client, creds, monkeypatch):
     fake_client.list_nodes.return_value = []
     r = runner.invoke(cli.app, ["nodes", "list"], env=creds)
     assert r.exit_code == 0, r.output
+
+
+def test_dotenv_discovery_uses_cwd(fake_client, creds, monkeypatch):
+    # Discovery must walk up from the *cwd*, not from the installed package
+    # location, so an editable install can't leak the repo's own .env into
+    # unrelated directories the CLI is run from.
+    import dotenv
+
+    captured = {}
+
+    def fake_find_dotenv(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        return ""
+
+    monkeypatch.setattr(dotenv, "find_dotenv", fake_find_dotenv)
+    fake_client.list_nodes.return_value = []
+    r = runner.invoke(cli.app, ["nodes", "list"], env=creds)
+    assert r.exit_code == 0, r.output
+    assert captured["kwargs"] == {"usecwd": True}
 
 
 # --------------------------------------------------- output-mode resolution ---
@@ -2128,8 +2154,13 @@ def test_guide_prints_agent_guide(creds):
     assert "task wait" in out
 
 
-def test_guide_needs_no_credentials():
-    r = runner.invoke(cli.app, ["guide"], env={"PMOX_CONFIG": "/nonexistent-pmox-config.toml"})
+def test_guide_needs_no_credentials(tmp_path):
+    # An explicit (env-provided) config path must now exist, so point at a real
+    # but empty file -- isolating from any real config on the host, same intent
+    # as the old nonexistent-path sentinel, without a credentials source.
+    empty_config = tmp_path / "empty.toml"
+    empty_config.write_text("")
+    r = runner.invoke(cli.app, ["guide"], env={"PMOX_CONFIG": str(empty_config)})
     assert r.exit_code == 0, r.output
     assert "--dangerous" in r.output
 

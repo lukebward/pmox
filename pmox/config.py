@@ -93,7 +93,7 @@ class Settings:
                 "Missing required configuration: "
                 + ", ".join(missing)
                 + ". Provide them via environment variables, a TOML config file, or CLI flags. "
-                + "See .env.example."
+                + "See https://lukebward.github.io/pmox/configuration/"
             )
         if "!" not in (self.token_id or ""):
             raise ConfigError(
@@ -127,7 +127,13 @@ def _coerce(source: dict, *, keys: dict) -> dict:
     out: dict = {}
     for dest, (src_key, coerce) in keys.items():
         if src_key in source and source[src_key] not in (None, ""):
-            out[dest] = coerce(source[src_key])
+            try:
+                out[dest] = coerce(source[src_key])
+            except (TypeError, ValueError) as exc:
+                kind = "a number" if coerce is int else "a valid value"
+                raise ConfigError(
+                    f"{src_key} must be {kind} (got {source[src_key]!r})."
+                ) from exc
     return out
 
 
@@ -204,8 +210,11 @@ def load_settings(
     Does NOT validate; call :meth:`Settings.validate` before connecting.
     """
     env = dict(os.environ if env is None else env)
+    explicit = config_path is not None or bool(os.environ.get("PMOX_CONFIG"))
     if config_path is None:
         config_path = default_config_path()
+    if explicit and not config_path.exists():
+        raise ConfigError(f"Config file not found: {config_path}")
 
     merged: dict = {}
     merged.update(_from_file(_load_config_file(config_path)))
