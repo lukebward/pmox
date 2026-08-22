@@ -33,7 +33,7 @@ import typer
 
 try:  # typer >= 0.26 vendors click as typer._click — the module whose exceptions typer raises
     from typer import _click as click
-except ImportError:  # pragma: no cover - we require typer>=0.26, which always vendors click
+except ImportError:  # pragma: no cover - reachable only under typer<0.26 (no vendored click); this venv pins 0.26+
     import click
 
 from . import __version__, arp, catalog, guestops, guide, ipam, provision, views
