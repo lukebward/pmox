@@ -539,7 +539,7 @@ TASK_COLUMNS = [
     Column("Start", "starttime", fmt_epoch),
     Column("User", "user"),
     Column("ID", "id"),
-    Column("UPID", row_formatter=lambda r: (r.get("upid", "") or "")[:48]),
+    Column("UPID", "upid"),
 ]
 
 CLUSTER_NODE_COLUMNS = [
@@ -1513,15 +1513,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 title=f"{label} {vmid} snapshots",
             )
 
-    @snap.command("create")
-    def _snap_create(
-        ctx: typer.Context,
-        vmid: int = vmid_arg,
-        name: str = typer.Argument(..., help="Snapshot name."),
-        description: Optional[str] = typer.Option(None, "--description", "-d"),
-        vmstate: bool = typer.Option(False, "--vmstate", help="Include RAM state."),
-        node: Optional[str] = node_opt,
-    ):
+    def _snap_create_impl(ctx: typer.Context, vmid: int, name: str, description: Optional[str], node: Optional[str], vmstate: bool = False):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, kind, vmid)
@@ -1539,6 +1531,31 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 params={"vmid": vmid, "snapname": name, **params},
                 vmid=vmid,
             )
+
+    if kind == "qemu":
+
+        @snap.command("create")
+        def _snap_create(
+            ctx: typer.Context,
+            vmid: int = vmid_arg,
+            name: str = typer.Argument(..., help="Snapshot name."),
+            description: Optional[str] = typer.Option(None, "--description", "-d"),
+            vmstate: bool = typer.Option(False, "--vmstate", help="Include RAM state."),
+            node: Optional[str] = node_opt,
+        ):
+            _snap_create_impl(ctx, vmid, name, description, node, vmstate=vmstate)
+
+    else:
+
+        @snap.command("create")
+        def _snap_create(
+            ctx: typer.Context,
+            vmid: int = vmid_arg,
+            name: str = typer.Argument(..., help="Snapshot name."),
+            description: Optional[str] = typer.Option(None, "--description", "-d"),
+            node: Optional[str] = node_opt,
+        ):
+            _snap_create_impl(ctx, vmid, name, description, node)
 
     @snap.command("delete")
     def _snap_delete(

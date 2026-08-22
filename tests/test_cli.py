@@ -6,6 +6,7 @@ These exercise every command plus the two-tier safety model end to end:
     * destructive ops still need --yes -> exit 3 without it
 """
 
+import io
 import json
 import re
 from types import SimpleNamespace
@@ -227,6 +228,29 @@ def test_task_list(fake_client, creds):
     fake_client.list_tasks.assert_called_once_with("pve1", limit=50)
 
 
+def test_task_table_shows_full_upid():
+    from rich.console import Console
+
+    from pmox.output import build_table
+
+    long_upid = "UPID:pve9:000ABC12:00DEF345:65A1B2C3:qmstart:100:root@pam!pmox:"
+    assert len(long_upid) >= 60
+    rows = [
+        {
+            "type": "qmstart",
+            "status": "OK",
+            "starttime": 0,
+            "user": "root@pam",
+            "id": "100",
+            "upid": long_upid,
+        }
+    ]
+    buf = io.StringIO()
+    Console(file=buf, width=200, color_system=None).print(build_table(rows, cli.TASK_COLUMNS))
+    out = buf.getvalue().replace("\n", "")
+    assert long_upid in out
+
+
 def test_task_status(fake_client, creds):
     fake_client.task_status.return_value = {"status": "OK"}
     r = inv(["task", "status", "UPID:x", "--node", "pve1"], creds)
@@ -393,6 +417,25 @@ def test_snapshot_create(fake_client, creds):
     r = inv(["--dangerous", "vm", "snapshot", "create", "100", "snap1", "-d", "desc", "--vmstate"], creds)
     assert r.exit_code == 0, r.output
     fake_client.create_snapshot.assert_called_once_with("pve1", "qemu", 100, "snap1", description="desc", vmstate=1)
+
+
+def test_ct_snapshot_create_works_without_vmstate(fake_client, creds):
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "lxc"}
+    r = inv(["--dangerous", "ct", "snapshot", "create", "100", "snap1", "-d", "desc"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.create_snapshot.assert_called_once_with("pve1", "lxc", 100, "snap1", description="desc")
+
+
+def test_ct_snapshot_create_has_no_vmstate_flag():
+    root = typer.main.get_command(cli.app)
+    ct_snap_create = root.commands["ct"].commands["snapshot"].commands["create"]
+    assert not any("--vmstate" in (p.opts or []) for p in ct_snap_create.params)
+
+
+def test_vm_snapshot_create_keeps_vmstate_flag():
+    root = typer.main.get_command(cli.app)
+    vm_snap_create = root.commands["vm"].commands["snapshot"].commands["create"]
+    assert any("--vmstate" in (p.opts or []) for p in vm_snap_create.params)
 
 
 def test_snapshot_delete_needs_yes(fake_client, creds):
