@@ -12,13 +12,14 @@ from typing import Optional
 
 from . import arp, guestops
 from .catalog import CPU_PRESSURE, MEM_PRESSURE, STORAGE_PRESSURE
+from .errors import NotFoundError
 
 _RECENT_TASK_LIMIT = 50
 
 
-def guest_not_found(vmid) -> LookupError:
+def guest_not_found(vmid) -> NotFoundError:
     """The standard, actionable error for a vmid that isn't in /cluster/resources."""
-    return LookupError(
+    return NotFoundError(
         f"Guest {vmid} not found in the cluster. Check `pmox vm list` / `pmox ct list`; "
         f"if it was created moments ago, retry shortly — or pass --node explicitly."
     )

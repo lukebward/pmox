@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from pmox import views
+from pmox.errors import NotFoundError
 
 
 def _client():
@@ -168,6 +169,12 @@ def test_guest_not_found_message_is_actionable():
     err = views.guest_not_found(999)
     assert "999" in str(err)
     assert "vm list" in str(err)
+
+
+def test_guest_not_found_returns_not_found_error():
+    err = views.guest_not_found(999)
+    assert isinstance(err, NotFoundError)
+    assert "999" in str(err)
 
 
 def test_describe_guest_wrong_kind_raises():

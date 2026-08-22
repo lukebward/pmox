@@ -12,9 +12,11 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 import pmox.cli as cli
+from pmox.errors import NotFoundError
 
 runner = CliRunner()
 
@@ -670,6 +672,61 @@ def test_error_boundary_passes_typer_exit_through(capsys):
         with cli.error_boundary(json_output=True):
             raise typer.Exit(7)
     assert capsys.readouterr().out == ""  # an already-emitted exit is not re-wrapped
+
+
+def test_error_boundary_not_found_envelope(capsys):
+    with pytest.raises(typer.Exit) as excinfo:
+        with cli.error_boundary(json_output=True):
+            raise NotFoundError("Guest 999 not found")
+    assert excinfo.value.exit_code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"] == "not_found"
+
+
+class _FakeAuthError(Exception):
+    status_code = 401
+
+
+def test_error_boundary_auth_envelope(capsys):
+    with pytest.raises(typer.Exit) as excinfo:
+        with cli.error_boundary(json_output=True):
+            raise _FakeAuthError("401 Unauthorized: invalid token")
+    assert excinfo.value.exit_code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"] == "auth"
+    assert "hint" in payload
+
+
+def test_error_boundary_auth_by_message_prefix(capsys):
+    with pytest.raises(typer.Exit):
+        with cli.error_boundary(json_output=True):
+            raise RuntimeError("403 Forbidden")
+    assert json.loads(capsys.readouterr().out)["error"] == "auth"
+
+
+def test_error_boundary_auth_status_code_403(capsys):
+    class _Fake403(Exception):
+        status_code = 403
+
+    with pytest.raises(typer.Exit):
+        with cli.error_boundary(json_output=True):
+            raise _Fake403("nope")
+    assert json.loads(capsys.readouterr().out)["error"] == "auth"
+
+
+def test_emit_error_not_found_human_label(capsys):
+    with pytest.raises(typer.Exit):
+        cli._emit_error(False, "not_found", "Guest 999 not found", 1)
+    assert "Not found" in plain(capsys.readouterr().err)
+
+
+def test_emit_error_auth_human_label(capsys):
+    with pytest.raises(typer.Exit):
+        cli._emit_error(False, "auth", "401 Unauthorized", 1, extra={"hint": cli._AUTH_HINT})
+    err = plain(capsys.readouterr().err).replace("\n", " ")
+    assert "Auth error" in err
+    assert "Token rejected" in err
+    assert "not the account password" in err
 
 
 def test_dry_run_emitter_shape(capsys):
@@ -2216,7 +2273,9 @@ def test_vm_ip_wait_guest_not_found_fails_immediately(fake_client, creds, monkey
     fake_client.locate_guest.return_value = None
     r = inv(["--json", "--wait", "vm", "ip", "999"], creds)
     assert r.exit_code == 1, r.output
-    assert "not found" in json.loads(r.output)["message"]
+    payload = json.loads(r.output)
+    assert "not found" in payload["message"]
+    assert payload["error"] == "not_found"
     fake_client.agent_network_interfaces.assert_not_called()
 
 
@@ -2693,6 +2752,7 @@ def test_vm_status_unknown_guest_emits_envelope(fake_client, creds):
     assert r.exit_code == 1, r.output
     payload = json.loads(r.output)
     assert payload["ok"] is False
+    assert payload["error"] == "not_found"
     assert "not found" in payload["message"]
     assert "vm list" in payload["message"]
 
@@ -2704,6 +2764,8 @@ def test_vm_command_on_container_suggests_ct(fake_client, creds):
     payload = json.loads(r.output)
     assert "pmox ct" in payload["message"]
     assert "wireguard" in payload["message"]
+    # kind mismatch is a "wrong subcommand" correction, not a not_found
+    assert payload["error"] == "error"
     fake_client.guest_status.assert_not_called()
 
 

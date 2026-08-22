@@ -1,6 +1,6 @@
 """The typed-error hierarchy that feeds structured fields into the JSON envelope."""
 
-from pmox.errors import PlanError, PmoxError, TaskFailed, TaskTimeout
+from pmox.errors import NotFoundError, PlanError, PmoxError, TaskFailed, TaskTimeout
 
 
 def test_pmox_error_carries_extra():
@@ -33,3 +33,10 @@ def test_task_failed_is_both_pmox_and_runtime_error():
 def test_plan_error_is_both_pmox_and_runtime_error():
     assert issubclass(PlanError, PmoxError)
     assert issubclass(PlanError, RuntimeError)
+
+
+def test_not_found_error_is_pmox_and_lookup_error():
+    err = NotFoundError("nope", extra={"hint": "re-list"})
+    assert isinstance(err, PmoxError)
+    assert isinstance(err, LookupError)
+    assert err.extra == {"hint": "re-list"}

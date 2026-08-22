@@ -39,7 +39,7 @@ except ImportError:  # pragma: no cover - reachable only under typer<0.26 (no ve
 from . import __version__, arp, catalog, guestops, guide, ipam, provision, views
 from .client import ProxmoxClient
 from .config import ConfigError, Settings, _parse_bool, load_settings
-from .errors import PlanError, PmoxError, TaskFailed, TaskTimeout
+from .errors import NotFoundError, PlanError, PmoxError, TaskFailed, TaskTimeout
 from .output import (
     Column,
     build_kv_table,
@@ -374,6 +374,8 @@ def _emit_error(json_output: bool, error: str, message: str, code: int, need=Non
             "config": ("red", "Config error"),
             "network": ("red", "Network error"),
             "usage": ("red", "Usage error"),
+            "auth": ("red", "Auth error"),
+            "not_found": ("red", "Not found"),
             "error": ("red", "Error"),
         }[error]
         err_console.print(f"[{label[0]}]{label[1]}:[/{label[0]}] {message}")
@@ -388,6 +390,20 @@ def _emit_dry_run(op: str, node, params, vmid=None) -> None:
         payload["vmid"] = vmid
     payload["params"] = params or {}
     print(json.dumps(payload, default=str, indent=2))
+
+
+_AUTH_HINT = (
+    "Token rejected. token-id looks like user@realm!name and the secret is the "
+    "token secret, not the account password. Note: an under-privileged token "
+    "often shows as EMPTY lists, not errors."
+)
+
+
+def _is_auth_error(exc: BaseException) -> bool:
+    """True for a Proxmox API authentication/authorization failure (401/403)."""
+    if getattr(exc, "status_code", None) in (401, 403):
+        return True
+    return str(exc).lstrip().startswith(("401", "403"))
 
 
 def _concise_network_reason(exc: BaseException) -> str:
@@ -422,6 +438,8 @@ def error_boundary(json_output: bool = False):
         _emit_error(json_output, "confirm_required", str(exc), 3, need=["--yes"])
     except ConfigError as exc:
         _emit_error(json_output, "config", str(exc), 2)
+    except NotFoundError as exc:
+        _emit_error(json_output, "not_found", str(exc), 1, extra=exc.extra)
     except PmoxError as exc:
         _emit_error(json_output, "error", str(exc), 1, extra=exc.extra)
     except requests.exceptions.SSLError as exc:
@@ -443,6 +461,8 @@ def error_boundary(json_output: bool = False):
             "Check PROXMOX_HOST/PROXMOX_PORT and network connectivity.", 1,
         )
     except Exception as exc:  # noqa: BLE001 - top-level CLI guard
+        if _is_auth_error(exc):
+            _emit_error(json_output, "auth", str(exc), 1, extra={"hint": _AUTH_HINT})
         _emit_error(json_output, "error", str(exc), 1)
 
 

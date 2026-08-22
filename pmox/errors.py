@@ -28,3 +28,8 @@ class TaskFailed(PmoxError, RuntimeError):
 
 class PlanError(PmoxError, RuntimeError):
     """A provisioning plan failed partway; ``extra`` says what completed and how to recover."""
+
+
+class NotFoundError(PmoxError, LookupError):
+    """A guest/node/storage/task lookup found nothing. Not worth retrying —
+    re-list (``pmox vm list`` / ``ct list`` / ``task list``) instead."""

@@ -41,9 +41,11 @@ Exit codes
 Error envelope (stdout, JSON mode)
 ----------------------------------
 {"ok": false, "error": <code>, "message": "...", ...}
-  error codes: read_only | confirm_required | config | usage | network | error
+  error codes: read_only | confirm_required | config | usage | auth | not_found | network | error
   - read_only / confirm_required carry `need`: ["--dangerous"] / ["--yes"].
   - network = connectivity/TLS/DNS trouble (usually worth a retry or a config check).
+  - auth = the API token was rejected (401/403). Fix credentials; don't retry.
+  - not_found = the vmid/upid/storage doesn't exist. Re-list instead of retrying.
   - Task failures carry `upid` + `node` + `hint`.
   - Provisioning failures carry `vmid`, `completed_steps`, `failed_step`, `hint`
     explaining how to recover (see "Long tasks & recovery" below).
