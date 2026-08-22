@@ -463,7 +463,8 @@ def error_boundary(json_output: bool = False):
     except Exception as exc:  # noqa: BLE001 - top-level CLI guard
         if _is_auth_error(exc):
             _emit_error(json_output, "auth", str(exc), 1, extra={"hint": _AUTH_HINT})
-        _emit_error(json_output, "error", str(exc), 1)
+        else:
+            _emit_error(json_output, "error", str(exc), 1)
 
 
 # ---- shared option / argument definitions ----
