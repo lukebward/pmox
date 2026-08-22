@@ -1513,7 +1513,14 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 title=f"{label} {vmid} snapshots",
             )
 
-    def _snap_create_impl(ctx: typer.Context, vmid: int, name: str, description: Optional[str], node: Optional[str], vmstate: bool = False):
+    def _snap_create_impl(
+        ctx: typer.Context,
+        vmid: int,
+        name: str,
+        description: Optional[str],
+        node: Optional[str],
+        vmstate: bool = False,
+    ):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, kind, vmid)

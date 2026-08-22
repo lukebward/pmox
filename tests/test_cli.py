@@ -426,6 +426,16 @@ def test_ct_snapshot_create_works_without_vmstate(fake_client, creds):
     fake_client.create_snapshot.assert_called_once_with("pve1", "lxc", 100, "snap1", description="desc")
 
 
+def test_ct_snapshot_create_rejects_vmstate_invocation(fake_client, creds):
+    """Regression: --vmstate must actually fail at invocation time for `ct snapshot create`,
+    not merely be absent from the Click param list (see test_ct_snapshot_create_has_no_vmstate_flag,
+    which guards the param-introspection layer)."""
+    r = inv(["--dangerous", "ct", "snapshot", "create", "100", "snap1", "--vmstate"], creds)
+    assert r.exit_code == 2, r.output
+    assert "No such option" in r.output and "--vmstate" in r.output
+    fake_client.create_snapshot.assert_not_called()
+
+
 def test_ct_snapshot_create_has_no_vmstate_flag():
     root = typer.main.get_command(cli.app)
     ct_snap_create = root.commands["ct"].commands["snapshot"].commands["create"]
@@ -2209,6 +2219,22 @@ def test_main_unknown_option_json_envelope(monkeypatch, capsys):
     payload = json.loads(out)
     assert payload["error"] == "usage"
     assert "--bogus" in payload["message"]
+
+
+def test_main_ct_snapshot_create_vmstate_json_envelope(monkeypatch, capsys):
+    """Regression for the dropped ct snapshot --vmstate flag: through the real `pmox` entry point
+    (cli.main()), the rejected option surfaces as the standard JSON usage envelope, same as any
+    other unrecognized option."""
+    code, out, err = _run_main(
+        monkeypatch,
+        capsys,
+        ["--dangerous", "ct", "snapshot", "create", "100", "snap1", "--vmstate"],
+        env={"PMOX_JSON": "1"},
+    )
+    assert code == 2
+    payload = json.loads(out)
+    assert payload["ok"] is False and payload["error"] == "usage"
+    assert "--vmstate" in payload["message"]
 
 
 def test_main_usage_error_human_keeps_click_text(monkeypatch, capsys):
