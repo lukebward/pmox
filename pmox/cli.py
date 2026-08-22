@@ -743,8 +743,13 @@ def health(ctx: typer.Context):
                       f"guests {data['guests']['running']} running / {data['guests']['stopped']} stopped")
         emit(data["nodes"], columns=HEALTH_NODE_COLUMNS, json_output=False, title="Nodes")
         emit(data["storage"], columns=HEALTH_STORAGE_COLUMNS, json_output=False, title="Storage")
+        issue_messages = {i["message"] for i in data["issues"]}
         for w in data["warnings"]:
-            console.print(f"[yellow]![/yellow] {w}")
+            if w not in issue_messages:
+                console.print(f"[yellow]![/yellow] {w}")
+        for issue in data["issues"]:
+            color = "red" if issue["severity"] == "critical" else "yellow"
+            console.print(f"[{color}]{issue['severity']}:[/{color}] {issue['message']}")
 
 
 # ---- nodes ----

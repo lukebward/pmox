@@ -275,13 +275,51 @@ def guest_ip_addresses(client, kind: str, vmid: int, node: Optional[str] = None,
     }
 
 
+def _task_failure_issues(client, node_name: str) -> list:
+    """Issues for task types whose most recent 3+ finished runs on ``node_name``
+    all failed (e.g. a nightly job that has been broken for days)."""
+    by_type: dict = {}
+    for t in client.list_tasks(node_name, limit=_RECENT_TASK_LIMIT):
+        if t.get("status") == "running" or not t.get("type"):
+            continue
+        by_type.setdefault(t["type"], []).append(t)
+    issues = []
+    for task_type, rows in sorted(by_type.items()):
+        rows.sort(key=lambda r: r.get("starttime") or 0, reverse=True)
+        streak = 0
+        for row in rows:
+            if str(row.get("exitstatus", "")) == "OK":
+                break
+            streak += 1
+        if streak >= 3:
+            issues.append({
+                "code": "task_failures",
+                "severity": "warning",
+                "node": node_name,
+                "message": (
+                    f"{node_name}: last {streak} {task_type} runs failed; "
+                    f"pmox task log {rows[0].get('upid')}"
+                ),
+            })
+    return issues
+
+
 def summarize_health(client) -> dict:
     """One-shot cluster triage: quorum, per-node CPU/mem pressure, storage near full,
-    and running/stopped guest counts, with a flat list of warnings."""
+    running/stopped guest counts, and a structured list of actionable issues (lost
+    quorum, offline nodes, unavailable storage, repeated task failures), with a flat
+    list of warnings."""
     status = client.cluster_status()
     cluster = next((e for e in status if e.get("type") == "cluster"), {})
     node_entries = [e for e in status if e.get("type") == "node"]
     warnings: list = []
+    issues: list = []
+
+    if not cluster.get("quorate", 0):
+        issues.append({
+            "code": "quorum_lost", "severity": "critical", "node": None,
+            "message": "cluster has lost quorum",
+        })
 
     nodes = []
     for n in client.list_nodes():
@@ -295,6 +333,13 @@ def summarize_health(client) -> dict:
         if mem >= MEM_PRESSURE:
             flags.append("mem-high")
             warnings.append(f"node {n.get('node')} mem {mem:.0%}")
+        if n.get("status") != "online":
+            issues.append({
+                "code": "node_offline", "severity": "critical", "node": n.get("node"),
+                "message": f"node {n.get('node')} is {n.get('status') or 'unknown'}",
+            })
+        else:
+            issues.extend(_task_failure_issues(client, n["node"]))
         nodes.append(
             {"node": n.get("node"), "status": n.get("status"), "cpu_pct": cpu, "mem_pct": mem, "flags": flags}
         )
@@ -307,16 +352,26 @@ def summarize_health(client) -> dict:
         if used >= STORAGE_PRESSURE:
             flags.append("storage-full")
             warnings.append(f"storage {s.get('storage')} {used:.0%}")
+        status_ = s.get("status")
+        if status_ and status_ not in ("active", "available"):
+            issues.append({
+                "code": "storage_unavailable", "severity": "warning", "node": s.get("node"),
+                "message": f"storage {s.get('storage')} on {s.get('node')} is {status_}",
+            })
         storage.append({"storage": s.get("storage"), "node": s.get("node"), "used_pct": used, "flags": flags})
 
     vms = client.cluster_resources(type="vm")
-    running = sum(1 for v in vms if v.get("status") == "running")
+    template_count = sum(1 for v in vms if v.get("template"))
+    guests = [v for v in vms if not v.get("template")]
+    running = sum(1 for v in guests if v.get("status") == "running")
+    warnings.extend(i["message"] for i in issues)
     return {
         "quorate": bool(cluster.get("quorate", 0)),
         "nodes_online": sum(1 for e in node_entries if e.get("online")),
         "nodes_total": len(node_entries),
         "nodes": nodes,
         "storage": storage,
-        "guests": {"running": running, "stopped": len(vms) - running},
+        "guests": {"running": running, "stopped": len(guests) - running, "templates": template_count},
+        "issues": issues,
         "warnings": warnings,
     }

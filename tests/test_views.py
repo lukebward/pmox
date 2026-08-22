@@ -78,6 +78,7 @@ def _health_client():
         {"node": "pve1", "status": "online", "cpu": 0.10, "mem": 2, "maxmem": 10},
         {"node": "pve2", "status": "online", "cpu": 0.90, "mem": 9, "maxmem": 10},
     ]
+    c.list_tasks.return_value = []
 
     def _resources(type=None):
         if type == "storage":
@@ -104,7 +105,7 @@ def test_summarize_health_flags_pressure():
     assert pve1["flags"] == []
     full = next(s for s in out["storage"] if s["storage"] == "full-store")
     assert "storage-full" in full["flags"]
-    assert out["guests"] == {"running": 1, "stopped": 1}
+    assert out["guests"] == {"running": 1, "stopped": 1, "templates": 0}
     assert any("pve2" in w for w in out["warnings"])
 
 
@@ -112,12 +113,130 @@ def test_summarize_health_handles_zero_maxima_and_no_quorum():
     c = MagicMock()
     c.cluster_status.return_value = [{"type": "cluster", "quorate": 0}]
     c.list_nodes.return_value = [{"node": "pve1", "status": "online", "cpu": 0, "mem": 0, "maxmem": 0}]
+    c.list_tasks.return_value = []
     c.cluster_resources.side_effect = lambda type=None: [] if type == "storage" else []
     out = views.summarize_health(c)
     assert out["quorate"] is False
     assert out["nodes"][0]["mem_pct"] == 0.0
-    assert out["guests"] == {"running": 0, "stopped": 0}
-    assert out["warnings"] == []
+    assert out["guests"] == {"running": 0, "stopped": 0, "templates": 0}
+    # quorum_lost is still an issue/warning even though nothing else is wrong
+    assert [i["code"] for i in out["issues"]] == ["quorum_lost"]
+    assert out["warnings"] == ["cluster has lost quorum"]
+
+
+# ---- Task 5: structured issues ---------------------------------------------
+
+
+def test_health_flags_lost_quorum_and_offline_node():
+    c = MagicMock()
+    c.cluster_status.return_value = [
+        {"type": "cluster", "quorate": 0},
+        {"type": "node", "name": "pve1", "online": 0},
+    ]
+    c.list_nodes.return_value = [
+        {"node": "pve1", "status": "offline", "cpu": 0, "mem": 0, "maxmem": 0},
+    ]
+    c.cluster_resources.side_effect = lambda type=None: []
+    result = views.summarize_health(c)
+    codes = {i["code"] for i in result["issues"]}
+    assert "quorum_lost" in codes
+    assert "node_offline" in codes
+    assert all(
+        i["severity"] == "critical"
+        for i in result["issues"]
+        if i["code"] in ("quorum_lost", "node_offline")
+    )
+    # every issue is mirrored into warnings
+    for issue in result["issues"]:
+        assert issue["message"] in result["warnings"]
+    # offline node's task API is unreachable -- must not be queried
+    c.list_tasks.assert_not_called()
+
+
+def test_health_flags_unavailable_storage():
+    c = MagicMock()
+    c.cluster_status.return_value = [{"type": "cluster", "quorate": 1}]
+    c.list_nodes.return_value = []
+    c.list_tasks.return_value = []
+    c.cluster_resources.side_effect = lambda type=None: (
+        [{"storage": "backup", "node": "pve1", "status": "unknown", "disk": 0, "maxdisk": 0}]
+        if type == "storage"
+        else []
+    )
+    result = views.summarize_health(c)
+    assert any(i["code"] == "storage_unavailable" for i in result["issues"])
+    issue = next(i for i in result["issues"] if i["code"] == "storage_unavailable")
+    assert issue["severity"] == "warning"
+    assert issue["message"] in result["warnings"]
+
+
+def test_health_flags_repeated_task_failures():
+    c = MagicMock()
+    c.cluster_status.return_value = [
+        {"type": "cluster", "quorate": 1},
+        {"type": "node", "name": "pve1", "online": 1},
+    ]
+    c.list_nodes.return_value = [
+        {"node": "pve1", "status": "online", "cpu": 0, "mem": 0, "maxmem": 10},
+    ]
+    c.cluster_resources.side_effect = lambda type=None: []
+    c.list_tasks.return_value = [
+        {"type": "aptupdate", "status": "stopped", "exitstatus": "unknown error",
+         "starttime": 400, "upid": "UPID:pve1:0004:aptupdate"},
+        {"type": "aptupdate", "status": "stopped", "exitstatus": "unknown error",
+         "starttime": 300, "upid": "UPID:pve1:0003:aptupdate"},
+        {"type": "aptupdate", "status": "stopped", "exitstatus": "unknown error",
+         "starttime": 200, "upid": "UPID:pve1:0002:aptupdate"},
+        {"type": "aptupdate", "status": "stopped", "exitstatus": "OK",
+         "starttime": 100, "upid": "UPID:pve1:0001:aptupdate"},
+        {"type": "qmstart", "status": "stopped", "exitstatus": "OK",
+         "starttime": 350, "upid": "UPID:pve1:0005:qmstart"},
+        # still-running and typeless rows must be skipped, not counted
+        {"type": "aptupdate", "status": "running", "starttime": 500, "upid": "UPID:pve1:0006:aptupdate"},
+        {"status": "stopped", "exitstatus": "unknown error", "starttime": 450},
+    ]
+    result = views.summarize_health(c)
+    issue = next(i for i in result["issues"] if i["code"] == "task_failures")
+    assert "aptupdate" in issue["message"]
+    assert "pmox task log UPID:" in issue["message"]
+    assert issue["message"] in result["warnings"]
+
+
+def test_health_excludes_templates_from_guest_counts():
+    c = MagicMock()
+    c.cluster_status.return_value = [{"type": "cluster", "quorate": 1}]
+    c.list_nodes.return_value = []
+    c.list_tasks.return_value = []
+    c.cluster_resources.side_effect = lambda type=None: (
+        []
+        if type == "storage"
+        else [
+            {"vmid": 100, "status": "running", "template": 0},
+            {"vmid": 101, "status": "stopped", "template": 0},
+            {"vmid": 102, "status": "stopped", "template": 1},
+        ]
+    )
+    result = views.summarize_health(c)
+    assert result["guests"] == {"running": 1, "stopped": 1, "templates": 1}
+
+
+def test_health_no_issues_on_healthy_cluster():
+    c = MagicMock()
+    c.cluster_status.return_value = [
+        {"type": "cluster", "quorate": 1},
+        {"type": "node", "name": "pve1", "online": 1},
+    ]
+    c.list_nodes.return_value = [
+        {"node": "pve1", "status": "online", "cpu": 0.1, "mem": 1, "maxmem": 10},
+    ]
+    c.list_tasks.return_value = []
+    c.cluster_resources.side_effect = lambda type=None: (
+        [{"storage": "local", "node": "pve1", "status": "active", "disk": 1, "maxdisk": 10}]
+        if type == "storage"
+        else [{"vmid": 100, "status": "running", "template": 0}]
+    )
+    result = views.summarize_health(c)
+    assert result["issues"] == []
 
 
 # ---- guest IP addresses --------------------------------------------------------

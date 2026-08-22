@@ -1120,6 +1120,7 @@ def test_describe_human_network_unavailable(fake_client, creds):
 def test_health_json(fake_client, creds):
     fake_client.cluster_status.return_value = [{"type": "cluster", "quorate": 1}, {"type": "node", "name": "p1", "online": 1}]
     fake_client.list_nodes.return_value = [{"node": "p1", "status": "online", "cpu": 0.1, "mem": 1, "maxmem": 10}]
+    fake_client.list_tasks.return_value = []
     fake_client.cluster_resources.side_effect = lambda type=None: (
         [{"storage": "local", "node": "p1", "disk": 1, "maxdisk": 10}] if type == "storage"
         else [{"vmid": 100, "status": "running"}]
@@ -1133,6 +1134,7 @@ def test_health_json(fake_client, creds):
 def test_health_human(fake_client, creds):
     fake_client.cluster_status.return_value = [{"type": "cluster", "quorate": 1}, {"type": "node", "name": "p1", "online": 1}]
     fake_client.list_nodes.return_value = [{"node": "p1", "status": "online", "cpu": 0.9, "mem": 9, "maxmem": 10}]
+    fake_client.list_tasks.return_value = []
     fake_client.cluster_resources.side_effect = lambda type=None: (
         [{"storage": "s", "node": "p1", "disk": 9, "maxdisk": 10}] if type == "storage"
         else [{"vmid": 100, "status": "running"}]
@@ -1140,6 +1142,24 @@ def test_health_human(fake_client, creds):
     r = inv(["--no-json", "health"], creds)
     assert r.exit_code == 0, r.output
     assert "p1" in plain(r.output)
+
+
+def test_health_human_renders_issues_without_duplicating_warnings(fake_client, creds):
+    fake_client.cluster_status.return_value = [
+        {"type": "cluster", "quorate": 0},
+        {"type": "node", "name": "p1", "online": 0},
+    ]
+    fake_client.list_nodes.return_value = [{"node": "p1", "status": "offline", "cpu": 0, "mem": 0, "maxmem": 0}]
+    fake_client.list_tasks.return_value = []
+    fake_client.cluster_resources.side_effect = lambda type=None: []
+    r = inv(["--no-json", "health"], creds)
+    assert r.exit_code == 0, r.output
+    out = plain(r.output)
+    assert "critical: cluster has lost quorum" in out
+    assert "critical: node p1 is offline" in out
+    # each issue message must appear exactly once (no double-print via plain warnings)
+    assert out.count("cluster has lost quorum") == 1
+    assert out.count("node p1 is offline") == 1
 
 
 # ------------------------------------------------- Task 6: vm new command --
