@@ -727,9 +727,10 @@ def server_version(ctx: typer.Context):
     state: State = ctx.obj
     payload: dict = {"client": __version__, "server": None}
     try:
-        state.settings.validate()
-        client = state.client or _client_factory(state.settings)
+        client = _get_client(ctx)
         payload["server"] = client.version()
+    except typer.Exit:
+        raise
     except ConfigError:
         payload["note"] = "not configured - see https://lukebward.github.io/pmox/configuration/"
     except Exception as exc:  # noqa: BLE001 - version must always answer

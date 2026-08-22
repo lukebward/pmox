@@ -103,6 +103,13 @@ def test_version_degrades_when_unreachable_human(fake_client, creds):
     assert "not connected" in plain(r.output)
 
 
+def test_version_lets_typer_exit_propagate(fake_client, creds):
+    fake_client.version.side_effect = typer.Exit(3)
+    r = inv(["--json", "version"], creds)
+    assert r.exit_code == 3, r.output
+    assert r.output == ""
+
+
 def test_nodes_list(fake_client, creds):
     fake_client.list_nodes.return_value = [{"node": "pve1", "status": "online"}]
     r = inv(["nodes", "list"], creds)
