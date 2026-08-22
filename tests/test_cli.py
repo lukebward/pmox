@@ -62,6 +62,13 @@ def test_all_static_help_text_is_ascii():
     assert not offenders, f"non-ASCII help text in: {offenders}"
 
 
+def test_every_command_has_help_text():
+    root = typer.main.get_command(cli.app)
+    blank = [path for path, cmd in _iter_click_commands(root)
+             if getattr(cmd, "commands", None) is None and not (cmd.help or "").strip()]
+    assert not blank, f"commands with no help text: {blank}"
+
+
 # ---------------------------------------------------------------- read-only --
 
 

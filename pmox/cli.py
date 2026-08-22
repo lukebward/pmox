@@ -858,9 +858,12 @@ def _make_power_command(group, kind, label, action, destructive, description):
 
 def build_guest_app(kind: str, label: str) -> typer.Typer:
     descr = "QEMU VMs" if kind == "qemu" else "LXC containers"
+    # Help text reads better with a fuller word for containers than the terse
+    # "CT" used in runtime messages/confirmations, so it gets its own label.
+    help_label = "VM" if kind == "qemu" else "container"
     group = typer.Typer(help=f"Manage {label}s ({descr}).", no_args_is_help=True)
 
-    @group.command("list")
+    @group.command("list", help=f"List all {help_label}s cluster-wide, or one node's with --node.")
     def _list(ctx: typer.Context, node: Optional[str] = node_opt, fields: Optional[str] = fields_opt):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
@@ -874,14 +877,14 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 title=f"{label}s",
             )
 
-    @group.command("status")
+    @group.command("status", help=f"Show the live status of a {help_label} (state, uptime, CPU/mem).")
     def _status(ctx: typer.Context, vmid: int = vmid_arg, node: Optional[str] = node_opt):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
             resolved = node or _resolve_node_or_die(client, kind, vmid)
             emit(client.guest_status(resolved, kind, vmid), json_output=ctx.obj.json, title=f"{label} {vmid} status")
 
-    @group.command("config")
+    @group.command("config", help=f"Show the raw Proxmox config of a {help_label}.")
     def _config(ctx: typer.Context, vmid: int = vmid_arg, node: Optional[str] = node_opt):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
@@ -902,11 +905,16 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 emit(data["snapshots"], columns=SNAPSHOT_COLUMNS, json_output=False, title="snapshots")
                 emit(data["recent_tasks"], columns=TASK_COLUMNS, json_output=False, title="recent tasks")
 
+    _ip_help = (
+        "Show the live IP address(es) of a VM: guest agent, static cloud-init config, or a "
+        "same-LAN ARP scan by MAC."
+        if kind == "qemu"
+        else "Show the live IP address(es) of a container via its network interfaces."
+    )
+
     @group.command(
         "ip",
-        help=f"Show the live IP address(es) of a {label} (VM: guest agent, static config, or a "
-        "same-LAN ARP scan by MAC; CT: via interfaces). With --wait, poll until an address "
-        "appears (bounded by --timeout).",
+        help=f"{_ip_help} With --wait, poll until an address appears (bounded by --timeout).",
     )
     def _ip(
         ctx: typer.Context,
@@ -1037,7 +1045,12 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
     ]:
         _make_power_command(group, kind, label, action, destructive, description)
 
-    @group.command("create")
+    _create_help = (
+        f"Create a bare {help_label} from raw API params (-o key=value). "
+        + ("Prefer `new`/`up` for guided creation." if kind == "qemu" else "Prefer `new` for guided creation.")
+    )
+
+    @group.command("create", help=_create_help)
     def _create(
         ctx: typer.Context,
         vmid: int = vmid_arg,
@@ -1418,7 +1431,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                     op="lxc.new", vmid=target_vmid, node=target_node,
                 )
 
-    @group.command("clone")
+    @group.command("clone", help=f"Clone a {help_label} or template to a new VMID.")
     def _clone(
         ctx: typer.Context,
         vmid: int = vmid_arg,
@@ -1448,7 +1461,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 vmid=newid,
             )
 
-    @group.command("migrate")
+    @group.command("migrate", help=f"Move a {help_label} to another node (destructive: requires --yes).")
     def _migrate(
         ctx: typer.Context,
         vmid: int = vmid_arg,
@@ -1476,7 +1489,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 confirm_msg=f"migrate {label.lower()} {vmid} from {resolved} to {target}",
             )
 
-    @group.command("delete")
+    @group.command("delete", help=f"Permanently delete a {help_label} and its disks (destructive: requires --yes).")
     def _delete(
         ctx: typer.Context,
         vmid: int = vmid_arg,
@@ -1503,7 +1516,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
     # snapshots (nested under the guest group)
     snap = typer.Typer(help=f"Manage {label} snapshots.", no_args_is_help=True)
 
-    @snap.command("list")
+    @snap.command("list", help=f"List snapshots of a {help_label}.")
     def _snap_list(ctx: typer.Context, vmid: int = vmid_arg, node: Optional[str] = node_opt):
         with error_boundary(ctx.obj.json):
             client = _get_client(ctx)
@@ -1543,12 +1556,14 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
 
     if kind == "qemu":
 
-        @snap.command("create")
+        @snap.command("create", help=f"Create a snapshot of a {help_label}.")
         def _snap_create(
             ctx: typer.Context,
             vmid: int = vmid_arg,
             name: str = typer.Argument(..., help="Snapshot name."),
-            description: Optional[str] = typer.Option(None, "--description", "-d"),
+            description: Optional[str] = typer.Option(
+                None, "--description", "-d", help="Free-form snapshot description."
+            ),
             vmstate: bool = typer.Option(False, "--vmstate", help="Include RAM state."),
             node: Optional[str] = node_opt,
         ):
@@ -1556,17 +1571,19 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
 
     else:
 
-        @snap.command("create")
+        @snap.command("create", help=f"Create a snapshot of a {help_label}.")
         def _snap_create(
             ctx: typer.Context,
             vmid: int = vmid_arg,
             name: str = typer.Argument(..., help="Snapshot name."),
-            description: Optional[str] = typer.Option(None, "--description", "-d"),
+            description: Optional[str] = typer.Option(
+                None, "--description", "-d", help="Free-form snapshot description."
+            ),
             node: Optional[str] = node_opt,
         ):
             _snap_create_impl(ctx, vmid, name, description, node)
 
-    @snap.command("delete")
+    @snap.command("delete", help="Delete a snapshot (destructive: requires --yes).")
     def _snap_delete(
         ctx: typer.Context,
         vmid: int = vmid_arg,
@@ -1590,7 +1607,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 confirm_msg=f"delete snapshot {name!r} of {label.lower()} {vmid}",
             )
 
-    @snap.command("rollback")
+    @snap.command("rollback", help=f"Roll a {help_label} back to a snapshot (destructive: requires --yes).")
     def _snap_rollback(
         ctx: typer.Context,
         vmid: int = vmid_arg,
@@ -1626,7 +1643,7 @@ ct_app = build_guest_app("lxc", "CT")
 storage_app = typer.Typer(help="Inspect storage.", no_args_is_help=True)
 
 
-@storage_app.command("list")
+@storage_app.command("list", help="List storages cluster-wide with capacity and content types.")
 def storage_list(ctx: typer.Context, node: Optional[str] = node_opt, fields: Optional[str] = fields_opt):
     with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
@@ -1638,7 +1655,7 @@ def storage_list(ctx: typer.Context, node: Optional[str] = node_opt, fields: Opt
         emit(rows, columns=None if fields else STORAGE_COLUMNS, json_output=ctx.obj.json, title="Storage")
 
 
-@storage_app.command("content")
+@storage_app.command("content", help="List the volumes on one storage.")
 def storage_content(
     ctx: typer.Context,
     storage: str = typer.Argument(..., help="Storage id."),
@@ -1663,7 +1680,7 @@ def storage_content(
 cluster_app = typer.Typer(help="Cluster-wide views.", no_args_is_help=True)
 
 
-@cluster_app.command("status")
+@cluster_app.command("status", help="Show cluster membership and quorum.")
 def cluster_status(ctx: typer.Context):
     with error_boundary(ctx.obj.json):
         client = _get_client(ctx)
@@ -1675,7 +1692,7 @@ def cluster_status(ctx: typer.Context):
         emit(nodes, columns=CLUSTER_NODE_COLUMNS, json_output=False, title="Cluster nodes")
 
 
-@cluster_app.command("resources")
+@cluster_app.command("resources", help="List cluster resources (guests, nodes, storage) with usage.")
 def cluster_resources(
     ctx: typer.Context,
     type: Optional[str] = typer.Option(None, "--type", help="Filter: vm | node | storage | sdn | pool."),
@@ -1698,7 +1715,7 @@ def cluster_resources(
 task_app = typer.Typer(help="Inspect node tasks.", no_args_is_help=True)
 
 
-@task_app.command("list")
+@task_app.command("list", help="List recent tasks on a node.")
 def task_list(
     ctx: typer.Context,
     node: Optional[str] = typer.Option(None, "--node", "-n", help="Node name (auto-picked on a single-node cluster)."),
@@ -1714,7 +1731,7 @@ def task_list(
         emit(rows, columns=None if fields else TASK_COLUMNS, json_output=ctx.obj.json, title=f"{resolved} tasks")
 
 
-@task_app.command("status")
+@task_app.command("status", help="Show the current status of a task by UPID.")
 def task_status(
     ctx: typer.Context,
     upid: str = typer.Argument(..., help="Task UPID."),
@@ -1726,7 +1743,7 @@ def task_status(
         emit(client.task_status(resolved, upid), json_output=ctx.obj.json, title="Task status")
 
 
-@task_app.command("log")
+@task_app.command("log", help="Print the log of a task by UPID.")
 def task_log(
     ctx: typer.Context,
     upid: str = typer.Argument(..., help="Task UPID."),
