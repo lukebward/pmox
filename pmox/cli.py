@@ -1321,7 +1321,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 if would_build:
                     if not ctx.obj.json:
                         err_console.print(
-                            f"[dim]No agent template for {image} on {target_node} — building one now "
+                            f"[dim]No agent template for {image} on {target_node} - building one now "
                             f"(one-time, a few minutes). Future `vm up --image {image}` calls will "
                             f"clone it in seconds.[/dim]"
                         )
@@ -1346,10 +1346,10 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                     hint = (f"The address comes from DHCP; `pmox vm ip {target_vmid} --wait` returns it "
                             f"(via the template's guest agent, or a same-LAN ARP scan).")
                 elif agent_tpl is not None:
-                    hint = (f"Run `pmox vm ip {target_vmid} --wait` — the clone's guest agent reports "
+                    hint = (f"Run `pmox vm ip {target_vmid} --wait` - the clone's guest agent reports "
                             f"the DHCP address (cloned from agent template {agent_tpl['vmid']}).")
                 else:
-                    hint = (f"The address comes from DHCP; run `pmox vm ip {target_vmid} --wait` — found via "
+                    hint = (f"The address comes from DHCP; run `pmox vm ip {target_vmid} --wait` - found via "
                             f"a same-LAN ARP scan (or check your DHCP leases). Run "
                             f"`pmox --dangerous template build {image}` once for instant, reliable "
                             f"guest-agent IPs, or use --ip / a [network] pool for a static address.")
