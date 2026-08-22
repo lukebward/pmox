@@ -31,10 +31,10 @@ from typing import List, Optional
 import requests
 import typer
 
-try:  # typer >= 0.26 vendors click as typer._click; older typer uses the real package
-    import click
-except ModuleNotFoundError:
+try:  # typer >= 0.26 vendors click as typer._click — the module whose exceptions typer raises
     from typer import _click as click
+except ImportError:  # pragma: no cover - we require typer>=0.26, which always vendors click
+    import click
 
 from . import __version__, arp, catalog, guestops, guide, ipam, provision, views
 from .client import ProxmoxClient
@@ -607,6 +607,7 @@ app = typer.Typer(
     "Run `pmox guide` for the full agent guide.",
     no_args_is_help=True,
     add_completion=False,
+    pretty_exceptions_enable=False,
 )
 
 
