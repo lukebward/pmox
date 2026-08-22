@@ -45,16 +45,62 @@ def plain(text):
 
 def test_server_version(fake_client, creds):
     fake_client.version.return_value = {"version": "8.1.4"}
-    r = inv(["version"], creds)
+    r = inv(["--no-json", "version"], creds)
     assert r.exit_code == 0, r.output
     fake_client.version.assert_called_once_with()
+    out = plain(r.output)
+    assert f"pmox {cli.__version__}" in out
+    assert "Proxmox VE 8.1.4" in out
 
 
-def test_server_version_json(fake_client, creds):
+def test_version_reports_client_and_server(fake_client, creds):
     fake_client.version.return_value = {"version": "8.1.4"}
     r = inv(["--json", "version"], creds)
     assert r.exit_code == 0, r.output
-    assert json.loads(r.output) == {"version": "8.1.4"}
+    assert json.loads(r.output) == {"client": cli.__version__, "server": {"version": "8.1.4"}}
+
+
+def test_version_degrades_when_unconfigured(creds, monkeypatch):
+    def boom(self):
+        raise cli.ConfigError("missing stuff")
+
+    monkeypatch.setattr(cli.Settings, "validate", boom)
+    r = inv(["--json", "version"], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["client"] == cli.__version__
+    assert payload["server"] is None
+    assert "not configured" in payload["note"]
+
+
+def test_version_degrades_when_unconfigured_human(creds, monkeypatch):
+    def boom(self):
+        raise cli.ConfigError("missing stuff")
+
+    monkeypatch.setattr(cli.Settings, "validate", boom)
+    r = inv(["--no-json", "version"], creds)
+    assert r.exit_code == 0, r.output
+    assert "not configured" in plain(r.output)
+
+
+def test_version_degrades_when_unreachable(fake_client, creds):
+    import requests
+
+    fake_client.version.side_effect = requests.exceptions.ConnectionError("boom")
+    r = inv(["--json", "version"], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["server"] is None
+    assert "not connected" in payload["note"]
+
+
+def test_version_degrades_when_unreachable_human(fake_client, creds):
+    import requests
+
+    fake_client.version.side_effect = requests.exceptions.ConnectionError("boom")
+    r = inv(["--no-json", "version"], creds)
+    assert r.exit_code == 0, r.output
+    assert "not connected" in plain(r.output)
 
 
 def test_nodes_list(fake_client, creds):
@@ -2020,11 +2066,11 @@ def test_network_error_dns_concise(fake_client, creds):
 
     wall = (
         "HTTPSConnectionPool(host='pve.local', port=8006): Max retries exceeded with url: "
-        "/api2/json/version (Caused by NameResolutionError(\"<urllib3.connection.HTTPSConnection object>: "
+        "/api2/json/nodes (Caused by NameResolutionError(\"<urllib3.connection.HTTPSConnection object>: "
         "Failed to resolve 'pve.local' ([Errno 11001] getaddrinfo failed)\"))"
     )
-    fake_client.version.side_effect = requests.exceptions.ConnectionError(wall)
-    r = inv(["--json", "version"], creds)
+    fake_client.list_nodes.side_effect = requests.exceptions.ConnectionError(wall)
+    r = inv(["--json", "nodes", "list"], creds)
     assert r.exit_code == 1, r.output
     payload = json.loads(r.output)
     assert payload["error"] == "network"
@@ -2036,10 +2082,10 @@ def test_network_error_dns_concise(fake_client, creds):
 def test_network_error_ssl_mentions_verify_flag(fake_client, creds):
     import requests
 
-    fake_client.version.side_effect = requests.exceptions.SSLError(
+    fake_client.list_nodes.side_effect = requests.exceptions.SSLError(
         "certificate verify failed: self-signed certificate"
     )
-    r = inv(["--json", "version"], creds)
+    r = inv(["--json", "nodes", "list"], creds)
     assert r.exit_code == 1, r.output
     payload = json.loads(r.output)
     assert payload["error"] == "network"
@@ -2049,8 +2095,8 @@ def test_network_error_ssl_mentions_verify_flag(fake_client, creds):
 def test_network_error_timeout(fake_client, creds):
     import requests
 
-    fake_client.version.side_effect = requests.exceptions.ReadTimeout("read timed out")
-    r = inv(["--json", "version"], creds)
+    fake_client.list_nodes.side_effect = requests.exceptions.ReadTimeout("read timed out")
+    r = inv(["--json", "nodes", "list"], creds)
     assert r.exit_code == 1, r.output
     payload = json.loads(r.output)
     assert payload["error"] == "network"
@@ -2060,8 +2106,8 @@ def test_network_error_timeout(fake_client, creds):
 def test_network_error_human_label(fake_client, creds):
     import requests
 
-    fake_client.version.side_effect = requests.exceptions.ConnectionError("Connection refused")
-    r = inv(["--no-json", "version"], creds)
+    fake_client.list_nodes.side_effect = requests.exceptions.ConnectionError("Connection refused")
+    r = inv(["--no-json", "nodes", "list"], creds)
     assert r.exit_code == 1, r.output
     assert "Network error" in plain(r.output)
 

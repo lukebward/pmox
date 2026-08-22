@@ -723,10 +723,23 @@ def guide_cmd():
 
 @app.command("version")
 def server_version(ctx: typer.Context):
-    """Show the Proxmox VE version of the connected node."""
-    with error_boundary(ctx.obj.json):
-        client = _get_client(ctx)
-        emit(client.version(), json_output=ctx.obj.json, title="Proxmox version")
+    """Show the pmox client version and, when reachable, the server's Proxmox VE version."""
+    state: State = ctx.obj
+    payload: dict = {"client": __version__, "server": None}
+    try:
+        state.settings.validate()
+        client = state.client or _client_factory(state.settings)
+        payload["server"] = client.version()
+    except ConfigError:
+        payload["note"] = "not configured - see https://lukebward.github.io/pmox/configuration/"
+    except Exception as exc:  # noqa: BLE001 - version must always answer
+        payload["note"] = f"not connected - {_concise_network_reason(exc)}"
+    if state.json:
+        print(json.dumps(payload, default=str, indent=2))
+    elif payload["server"]:
+        console.print(f"pmox {__version__} - server: Proxmox VE {payload['server'].get('version', '?')}")
+    else:
+        console.print(f"pmox {__version__} - server: {payload['note']}")
 
 
 @app.command("health")
