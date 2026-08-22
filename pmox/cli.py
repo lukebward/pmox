@@ -47,6 +47,7 @@ from .output import (
     emit,
     err_console,
     fmt_epoch,
+    glyph,
     human_bytes,
     human_uptime,
     percent,
@@ -358,7 +359,7 @@ def _ok(ctx: typer.Context, message: str, **fields) -> None:
     if state.json:
         print(json.dumps({"ok": True, "message": message, **fields}, default=str, indent=2))
     else:
-        console.print(f"[green]✓[/green] {message}")
+        console.print(f"[green]{glyph('✓')}[/green] {message}")
         detail = fields.get("upid") or fields.get("task") or fields.get("result")
         if detail:
             console.print(f"  [dim]{detail}[/dim]")
@@ -619,7 +620,7 @@ def _print_network_section(network) -> None:
     if not network.get("available"):
         console.print(f"[dim]network: unavailable ({network.get('reason', 'unknown')})[/dim]")
         return
-    console.print(f"network · primary {network.get('primary') or '-'}")
+    console.print(f"network {glyph('·')} primary {network.get('primary') or '-'}")
     emit(_ip_rows_filtered(network.get("interfaces", [])), columns=IP_COLUMNS, json_output=False)
 
 
@@ -645,7 +646,7 @@ def main_callback(
     json_output: Optional[bool] = typer.Option(
         None,
         "--json/--no-json",
-        help="Force JSON or human tables. Default: auto — JSON when output is piped/captured "
+        help="Force JSON or human tables. Default: auto - JSON when output is piped/captured "
         "(e.g. an AI driving the CLI), tables at an interactive terminal.",
     ),
     dangerous: Optional[bool] = typer.Option(
@@ -753,7 +754,8 @@ def health(ctx: typer.Context):
             emit(data, json_output=True)
             return
         quorum = "[green]quorate[/green]" if data["quorate"] else "[red]NO QUORUM[/red]"
-        console.print(f"Cluster: {quorum} · nodes {data['nodes_online']}/{data['nodes_total']} online · "
+        dot = glyph("·")
+        console.print(f"Cluster: {quorum} {dot} nodes {data['nodes_online']}/{data['nodes_total']} online {dot} "
                       f"guests {data['guests']['running']} running / {data['guests']['stopped']} stopped")
         emit(data["nodes"], columns=HEALTH_NODE_COLUMNS, json_output=False, title="Nodes")
         emit(data["storage"], columns=HEALTH_STORAGE_COLUMNS, json_output=False, title="Storage")
@@ -924,11 +926,11 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 emit(data, json_output=True)
                 return
             name = f" ({data['name']})" if data.get("name") else ""
-            console.print(f"{label} {vmid}{name} on {data['node']} · primary {data['primary'] or '-'}")
+            console.print(f"{label} {vmid}{name} on {data['node']} {glyph('·')} primary {data['primary'] or '-'}")
             rows = _ip_rows_all(data["interfaces"]) if all_ else _ip_rows_filtered(data["interfaces"])
             emit(rows, columns=(IP_ALL_COLUMNS if all_ else IP_COLUMNS), json_output=False)
 
-    @group.command("set", help=f"Update configuration of a {label} (cores, memory, disks, nics, tags, …).")
+    @group.command("set", help=f"Update configuration of a {label} (cores, memory, disks, nics, tags, ...).")
     def _set(
         ctx: typer.Context,
         vmid: int = vmid_arg,
@@ -1079,7 +1081,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
             ssh_key: Optional[List[str]] = typer.Option(None, "--ssh-key", help="Path to an SSH public key file (repeatable; ~ is expanded). Cloud-init mode."),
             ip: Optional[str] = typer.Option(None, "--ip", help="dhcp or <cidr>,gw=<ip>. Cloud-init mode."),
             ciuser: Optional[str] = typer.Option(None, "--ciuser", help="Cloud-init user. Cloud-init mode."),
-            cipassword: Optional[str] = typer.Option(None, "--cipassword", help="Cloud-init password (visible in process listings — prefer SSH keys). Cloud-init mode."),
+            cipassword: Optional[str] = typer.Option(None, "--cipassword", help="Cloud-init password (visible in process listings - prefer SSH keys). Cloud-init mode."),
             nameserver: Optional[str] = typer.Option(None, "--nameserver", help="Cloud-init DNS server(s). Cloud-init mode."),
         ):
             with error_boundary(ctx.obj.json):
@@ -1381,7 +1383,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
             vmid: Optional[int] = typer.Option(None, "--vmid", help="VMID (auto-assigned if omitted)."),
             ssh_key: Optional[List[str]] = typer.Option(None, "--ssh-key", help="Path to an SSH public key file (repeatable; ~ is expanded)."),
             ip: str = typer.Option("dhcp", "--ip", help="dhcp or <cidr>,gw=<ip>."),
-            password: Optional[str] = typer.Option(None, "--password", help="Root password (visible in process listings — prefer SSH keys)."),
+            password: Optional[str] = typer.Option(None, "--password", help="Root password (visible in process listings - prefer SSH keys)."),
         ):
             with error_boundary(ctx.obj.json):
                 client = _get_client(ctx)
@@ -1439,7 +1441,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
             _execute(
                 ctx,
                 op=f"{kind}.clone",
-                message=f"Cloning {label.lower()} {vmid} → {newid}",
+                message=f"Cloning {label.lower()} {vmid} {glyph('→')} {newid}",
                 node=resolved,
                 call=lambda: client.clone_guest(resolved, kind, vmid, newid, **params),
                 params={"vmid": vmid, "newid": newid, **params},
@@ -1464,7 +1466,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
             _execute(
                 ctx,
                 op=f"{kind}.migrate",
-                message=f"Migrating {label.lower()} {vmid} → {target}",
+                message=f"Migrating {label.lower()} {vmid} {glyph('→')} {target}",
                 node=resolved,
                 call=lambda: client.migrate_guest(resolved, kind, vmid, target, **params),
                 params={"vmid": vmid, "target": target, **params},
@@ -1602,7 +1604,7 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
             _execute(
                 ctx,
                 op=f"{kind}.snapshot.rollback",
-                message=f"Rolling back {label.lower()} {vmid} → {name!r}",
+                message=f"Rolling back {label.lower()} {vmid} {glyph('→')} {name!r}",
                 node=resolved,
                 call=lambda: client.rollback_snapshot(resolved, kind, vmid, name),
                 params={"vmid": vmid, "snapname": name},
@@ -1866,7 +1868,7 @@ def image_pull(
             checksum=ck_digest or spec["checksum"], checksum_algorithm=ck_algo or spec["algo"],
         )
         _maybe_wait(ctx, node, upid)
-        _ok(ctx, f"Pulled {image} → {volid}", op="image.pull", node=node, volid=volid, upid=upid)
+        _ok(ctx, f"Pulled {image} {glyph('→')} {volid}", op="image.pull", node=node, volid=volid, upid=upid)
 
 
 # ---- agent templates ----
@@ -1950,7 +1952,7 @@ def template_build(
     cleans the guest for cloning (cloud-init state, machine-id, host keys), and
     converts it to a tagged template. `vm up --image <image>` clones it
     automatically from then on, so `vm ip --wait` gets agent-reported addresses.
-    This is the one pmox operation that reaches inside a guest — over SSH, using
+    This is the one pmox operation that reaches inside a guest - over SSH, using
     the key it injected moments earlier.
     """
     with error_boundary(ctx.obj.json):
@@ -2228,7 +2230,20 @@ def _dangling_group_path(argv: List[str]) -> Optional[str]:
     return " ".join(path) if getattr(cmd, "commands", None) else None
 
 
+def _force_utf8(stream) -> None:
+    """Best-effort UTF-8 for Windows consoles and pipes (cp1252 by default)."""
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure is None:
+        return
+    try:
+        reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001 - encoding setup must never kill the CLI
+        pass
+
+
 def main():
+    _force_utf8(sys.stdout)
+    _force_utf8(sys.stderr)
     argv = hoist_global_flags(sys.argv[1:])
     if _json_mode_from_argv(argv):
         dangling = _dangling_group_path(argv)

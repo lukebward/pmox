@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, List, Optional
@@ -12,6 +13,22 @@ from rich.table import Table
 
 console = Console()
 err_console = Console(stderr=True)
+
+_GLYPH_FALLBACKS = {"✓": "OK", "→": "->", "·": "-", "…": "..."}
+
+
+def glyph(char: str) -> str:
+    """``char`` when the stdout encoding can render it, else an ASCII stand-in.
+
+    Human-mode niceties (checkmarks, arrows) must degrade on legacy Windows
+    consoles instead of printing ``?``; JSON output is \\u-escaped and immune.
+    """
+    encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+    try:
+        char.encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        return _GLYPH_FALLBACKS.get(char, "?")
+    return char
 
 
 def human_bytes(value: Any) -> str:

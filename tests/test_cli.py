@@ -41,6 +41,27 @@ def plain(text):
     return _ANSI_RE.sub("", text)
 
 
+# ------------------------------------------------------------- ASCII help guard --
+
+
+def _iter_click_commands(cmd, path="pmox"):
+    yield path, cmd
+    for name, sub in (getattr(cmd, "commands", None) or {}).items():
+        yield from _iter_click_commands(sub, f"{path} {name}")
+
+
+def test_all_static_help_text_is_ascii():
+    root = typer.main.get_command(cli.app)
+    offenders = []
+    for path, cmd in _iter_click_commands(root):
+        texts = [("help", cmd.help or "")]
+        texts += [(f"option {p.opts}", p.help or "") for p in getattr(cmd, "params", [])]
+        for where, text in texts:
+            if any(ord(ch) > 127 for ch in text):
+                offenders.append(f"{path}: {where}")
+    assert not offenders, f"non-ASCII help text in: {offenders}"
+
+
 # ---------------------------------------------------------------- read-only --
 
 

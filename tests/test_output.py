@@ -1,5 +1,6 @@
 import io
 import json
+import sys
 
 import pytest
 from rich.console import Console
@@ -10,6 +11,7 @@ from pmox.output import (
     build_table,
     emit,
     fmt_epoch,
+    glyph,
     human_bytes,
     human_uptime,
     percent,
@@ -161,3 +163,42 @@ def test_emit_scalar():
     buf = io.StringIO()
     emit("hello", console_=Console(file=buf, width=80, color_system=None))
     assert "hello" in buf.getvalue()
+
+
+# ---------------------------------------------------------------------- glyph --
+
+
+def test_glyph_passes_through_when_encodable(monkeypatch):
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(io.BytesIO(), encoding="utf-8"))
+    assert glyph("✓") == "✓"
+
+
+def test_glyph_falls_back_on_cp1252(monkeypatch):
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(io.BytesIO(), encoding="cp1252"))
+    assert glyph("✓") == "OK"
+    assert glyph("→") == "->"
+
+
+def test_glyph_falls_back_to_dash_and_ellipsis(monkeypatch):
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(io.BytesIO(), encoding="ascii"))
+    assert glyph("·") == "-"
+    assert glyph("…") == "..."
+
+
+def test_glyph_unknown_char_falls_back_to_question_mark(monkeypatch):
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(io.BytesIO(), encoding="ascii"))
+    assert glyph("❤") == "?"
+
+
+def test_glyph_handles_missing_or_bogus_encoding(monkeypatch):
+    class _NoEncoding:
+        pass
+
+    monkeypatch.setattr(sys, "stdout", _NoEncoding())
+    assert glyph("✓") == "OK"
+
+    class _BogusEncoding:
+        encoding = "not-a-real-encoding"
+
+    monkeypatch.setattr(sys, "stdout", _BogusEncoding())
+    assert glyph("→") == "->"
