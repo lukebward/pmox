@@ -14,7 +14,7 @@ per-subcommand flag and goes after the subcommand:
 ## All commands
 
 ```
-pmox version                         client version + server version if reachable; never fails
+pmox version                         client version + server version if reachable (global config errors can still exit 2 before any command runs)
 pmox guide                           print the built-in agent/automation guide
 pmox health                          one-shot cluster health triage (read-only)
 pmox nodes list                      nodes + CPU/mem/uptime

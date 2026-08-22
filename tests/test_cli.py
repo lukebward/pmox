@@ -139,6 +139,26 @@ def test_version_lets_typer_exit_propagate(fake_client, creds):
     assert r.output == ""
 
 
+def test_version_handles_falsy_server_response_human(fake_client, creds):
+    """client.version() can return {} without raising (e.g. an odd but 2xx
+    response) -- the human branch must not KeyError on a missing 'note'."""
+    fake_client.version.return_value = {}
+    r = inv(["--no-json", "version"], creds)
+    assert r.exit_code == 0, r.output
+    assert r.exception is None
+    assert f"pmox {cli.__version__}" in plain(r.output)
+
+
+def test_version_handles_falsy_server_response_json(fake_client, creds):
+    fake_client.version.return_value = {}
+    r = inv(["--json", "version"], creds)
+    assert r.exit_code == 0, r.output
+    assert r.exception is None
+    payload = json.loads(r.output)
+    assert payload["client"] == cli.__version__
+    assert payload["server"] == {}
+
+
 def test_nodes_list(fake_client, creds):
     fake_client.list_nodes.return_value = [{"node": "pve1", "status": "online"}]
     r = inv(["nodes", "list"], creds)

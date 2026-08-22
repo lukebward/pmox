@@ -741,7 +741,7 @@ def server_version(ctx: typer.Context):
     elif payload["server"]:
         console.print(f"pmox {__version__} - server: Proxmox VE {payload['server'].get('version', '?')}")
     else:
-        console.print(f"pmox {__version__} - server: {payload['note']}")
+        console.print(f"pmox {__version__} - server: {payload.get('note', 'unknown')}")
 
 
 @app.command("health")

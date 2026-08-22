@@ -61,7 +61,7 @@ agent template, so `vm ip --wait` is agent-backed).
 
 Discovery (always safe, no flags)
 ---------------------------------
-pmox health                          one-shot cluster triage
+pmox health                          one-shot cluster triage (structured "issues" list: quorum, offline nodes, failing tasks)
 pmox nodes list / cluster status / cluster resources [--type vm|node|storage]
 pmox vm list / ct list [--node N] [--fields ...]
 pmox vm describe <vmid>              status+config+snapshots+tasks+network in one call

@@ -354,7 +354,7 @@ set separately.
 ### Inspect (always safe — no flags needed)
 
 ```
-pmox version                             # client + server version; never fails (server: null if unreachable)
+pmox version                             # client + server version; server: null if unreachable (global config errors can still exit 2 before any command runs)
 pmox health
 pmox nodes list
 pmox nodes status <node>

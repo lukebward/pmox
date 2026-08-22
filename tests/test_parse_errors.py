@@ -15,11 +15,13 @@ import pytest
 
 
 def _run(*args: str) -> subprocess.CompletedProcess:
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("PMOX_", "PROXMOX_"))}
+    env["PMOX_JSON"] = "1"
     return subprocess.run(
         [sys.executable, "-m", "pmox", *args],
         capture_output=True,
         text=True,
-        env={**os.environ, "PMOX_JSON": "1"},
+        env=env,
     )
 
 
