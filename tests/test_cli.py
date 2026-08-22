@@ -656,6 +656,20 @@ def test_error_json_envelope_confirm(fake_client, creds):
     assert payload["need"] == ["--yes"]
 
 
+def test_destructive_json_mode_fails_fast_even_with_tty_stdin(fake_client, creds, monkeypatch):
+    """JSON mode (captured stdout) + interactive stdin must NOT prompt: it
+    must raise ConfirmationRequired immediately (exit 3, need: --yes)."""
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
+    monkeypatch.setattr(cli, "stdin_is_tty", lambda: True)
+    r = inv(["--json", "--dangerous", "vm", "delete", "100"], creds)
+    assert r.exit_code == 3, r.output
+    payload = json.loads(r.output)
+    assert payload["error"] == "confirm_required"
+    assert payload["need"] == ["--yes"]
+    assert "sure" not in r.output.lower()
+    fake_client.delete_guest.assert_not_called()
+
+
 def test_error_human_readonly_still_rich(fake_client, creds):
     fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
     r = inv(["--no-json", "vm", "start", "100"], creds)

@@ -27,6 +27,17 @@ def test_interactive_no():
     assert confirm("delete vm 100", interactive=True, prompt_func=lambda _m: False) is False
 
 
+def test_interactive_defaults_to_stdin_tty(monkeypatch):
+    """When callers omit ``interactive`` entirely, confirm() falls back to
+    checking stdin itself (cli.py always passes it explicitly nowadays, but
+    the module-level default remains part of confirm()'s public contract)."""
+    import pmox.safety as safety
+
+    monkeypatch.setattr(safety, "stdin_is_tty", lambda: False)
+    with pytest.raises(ConfirmationRequired):
+        confirm("delete vm 100")
+
+
 def test_is_destructive():
     assert is_destructive("delete")
     assert is_destructive("stop")

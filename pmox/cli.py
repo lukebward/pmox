@@ -58,6 +58,7 @@ from .safety import (
     confirm,
     require_dangerous,
     set_requires_confirmation,
+    stdin_is_tty,
 )
 
 # Global flags accepted in any position (hoisted to the front before Typer parses).
@@ -293,7 +294,13 @@ def _execute(
         return None
     require_dangerous(state.dangerous)
     if destructive:
-        confirm(confirm_msg or message, assume_yes=yes)
+        # Prompting is only safe when a human sees BOTH streams: a captured
+        # stdout (JSON mode) with a TTY stdin would block forever on an
+        # invisible prompt. Fail fast with exit 3 / need: --yes instead.
+        interactive = (
+            stdin_is_tty() and _stream_isatty(sys.stdout) and not state.json
+        )
+        confirm(confirm_msg or message, assume_yes=yes, interactive=interactive)
     result = call()
     if state.wait:
         result = _maybe_wait(ctx, node, result)
