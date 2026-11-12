@@ -2368,7 +2368,7 @@ def main():
             raise SystemExit(2)
     try:
         rv = app(args=argv, standalone_mode=False)
-    except click.exceptions.Abort:
+    except typer.Abort:
         err_console.print("Aborted.")
         raise SystemExit(1)
     except click.exceptions.ClickException as exc:

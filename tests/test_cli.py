@@ -2316,7 +2316,7 @@ def test_main_version_flag_exits_zero(monkeypatch, capsys):
 
 def test_main_translates_abort_to_exit1(monkeypatch, capsys):
     def fake_app(**kw):
-        raise cli.click.exceptions.Abort()
+        raise typer.Abort()
 
     monkeypatch.setattr(cli, "app", fake_app)
     monkeypatch.setattr(cli.sys, "argv", ["pmox", "vm", "list"])

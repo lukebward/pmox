@@ -1,3 +1,3 @@
 """pmox - a CLI for exploring and managing a Proxmox VE cluster, built for AI agents."""
 
-__version__ = "0.8.0"
+__version__ = "0.8.1"

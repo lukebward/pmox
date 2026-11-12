@@ -6,6 +6,13 @@ All notable changes to pmox are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-11
+
+### Fixed
+- Parse errors again emit the `{"error": "usage"}` envelope with exit 2 on typer >= 0.27.1.
+  Typer moved `Abort` out of its vendored click exceptions module, so the top-level
+  handler raised `AttributeError` and leaked a traceback.
+
 ## [0.8.0] - 2026-11-11
 
 ### Added
@@ -312,7 +319,8 @@ Initial release.
 - Claude Code plugin (`plugin/`) with a `proxmox` skill and the
   `/pmox:cluster-status`, `/pmox:list-guests`, and `/pmox:run` commands.
 
-[Unreleased]: https://github.com/lukebward/pmox/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/lukebward/pmox/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/lukebward/pmox/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/lukebward/pmox/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/lukebward/pmox/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/lukebward/pmox/compare/v0.7.0...v0.7.1
