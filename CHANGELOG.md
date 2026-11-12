@@ -14,6 +14,12 @@ All notable changes to pmox are recorded here. The format follows
   `--yes`), returns `exitcode`/`out`/`err` in JSON mode, and exits 1 on a non-zero guest
   exit code. Containers are not covered: the Proxmox API has no exec endpoint for LXC.
 
+### Fixed
+- `vm up`, `template build`, and `vm new --image` no longer fail or come up without SSH on
+  current Ubuntu images. Proxmox's default first-boot package upgrade (`ciupgrade`) filled
+  the unresized image disk and took sshd down, so the agent install timed out. Image VMs
+  are now created with `ciupgrade=0`; pass `-o ciupgrade=1` to `vm new` to opt back in.
+
 ## [0.7.2] - 2026-08-22
 
 ### Fixed

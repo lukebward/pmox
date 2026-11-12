@@ -332,6 +332,8 @@ def build_vm_image_plan(
         "serial0": "socket",
         "vga": "serial0",
         "agent": 1,
+        # First-boot apt upgrade fills the unresized image disk and takes sshd down mid-boot.
+        "ciupgrade": 0,
         "scsi0": f"{storage}:0,import-from={volid},iothread=1",
         "ide2": f"{storage}:cloudinit",
         "boot": "order=scsi0",

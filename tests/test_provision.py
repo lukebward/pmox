@@ -64,6 +64,7 @@ def test_build_vm_image_plan_downloads_when_absent():
     assert create["scsi0"] == "local:0,import-from=local:import/noble-server-cloudimg-amd64.qcow2,iothread=1"
     assert create["ide2"] == "local:cloudinit"
     assert create["serial0"] == "socket" and create["vga"] == "serial0"
+    assert create["ciupgrade"] == 0  # no first-boot apt upgrade: it fills the image disk and kills sshd
     assert create["sshkeys"] == provision.encode_sshkeys("ssh-ed25519 AAAA u@h")
     assert create["ipconfig0"] == "ip=dhcp" and create["ciuser"] == "ubuntu"
     assert create["cores"] == 1 and create["memory"] == 1024 and create["name"] == "web"
