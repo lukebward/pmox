@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sys
 import time
 from contextlib import contextmanager
@@ -270,6 +271,14 @@ def _maybe_wait(ctx: typer.Context, node: str, result):
         time.sleep(_POLL_SECONDS)
 
 
+def _confirm_destructive(state: State, action: str, yes: bool) -> None:
+    # Prompting is only safe when a human sees BOTH streams: a captured
+    # stdout (JSON mode) with a TTY stdin would block forever on an
+    # invisible prompt. Fail fast with exit 3 / need: --yes instead.
+    interactive = stdin_is_tty() and _stream_isatty(sys.stdout) and not state.json
+    confirm(action, assume_yes=yes, interactive=interactive)
+
+
 def _execute(
     ctx: typer.Context,
     *,
@@ -295,13 +304,7 @@ def _execute(
         return None
     require_dangerous(state.dangerous)
     if destructive:
-        # Prompting is only safe when a human sees BOTH streams: a captured
-        # stdout (JSON mode) with a TTY stdin would block forever on an
-        # invisible prompt. Fail fast with exit 3 / need: --yes instead.
-        interactive = (
-            stdin_is_tty() and _stream_isatty(sys.stdout) and not state.json
-        )
-        confirm(confirm_msg or message, assume_yes=yes, interactive=interactive)
+        _confirm_destructive(state, confirm_msg or message, yes)
     result = call()
     if state.wait:
         result = _maybe_wait(ctx, node, result)
@@ -1513,6 +1516,61 @@ def build_guest_app(kind: str, label: str) -> typer.Typer:
                 confirm_msg=f"DELETE {label.lower()} {vmid} on {resolved} (irreversible)",
             )
 
+    if kind == "qemu":
+
+        @group.command(
+            "exec",
+            help="Run a command inside a VM as root, through the QEMU guest agent "
+                 "(destructive: requires --yes). Put the command after `--`.",
+        )
+        def _exec(
+            ctx: typer.Context,
+            vmid: int = vmid_arg,
+            command: List[str] = typer.Argument(
+                ..., metavar="-- COMMAND [ARGS]...",
+                help="Program and arguments, run directly (no shell; use `-- sh -c '...'` for one).",
+            ),
+            stdin: Optional[str] = typer.Option(
+                None, "--stdin", metavar="FILE",
+                help="Text file to send as the command's standard input ('-' reads pmox's stdin).",
+            ),
+            node: Optional[str] = node_opt,
+            yes: bool = yes_opt,
+        ):
+            with error_boundary(ctx.obj.json):
+                state: State = ctx.obj
+                client = _get_client(ctx)
+                resolved = node or _resolve_node_or_die(client, kind, vmid)
+                if state.dry_run:
+                    _emit_dry_run("qemu.exec", resolved, {"command": command, "stdin": stdin}, vmid=vmid)
+                    return
+                require_dangerous(state.dangerous)
+                _confirm_destructive(state, f"run `{shlex.join(command)}` as root in VM {vmid}", yes)
+                input_data = None
+                if stdin is not None:
+                    input_data = sys.stdin.read() if stdin == "-" else Path(stdin).read_text(encoding="utf-8")
+                status = _agent_exec_wait(ctx, client, resolved, vmid, command, input_data)
+                exitcode = status.get("exitcode")  # absent when a signal killed the command
+                out = status.get("out-data") or ""
+                err = status.get("err-data") or ""
+                truncated = bool(status.get("out-truncated") or status.get("err-truncated"))
+                if state.json:
+                    print(json.dumps(
+                        {
+                            "ok": exitcode == 0, "op": "qemu.exec", "node": resolved, "vmid": vmid,
+                            "command": command, "exitcode": exitcode, "signal": status.get("signal"),
+                            "out": out, "err": err, "truncated": truncated,
+                        },
+                        default=str, indent=2,
+                    ))
+                else:
+                    sys.stdout.write(out)
+                    sys.stderr.write(err)
+                    if truncated:
+                        err_console.print("[yellow]Output was truncated by the guest agent.[/yellow]")
+                if exitcode != 0:
+                    raise typer.Exit(1)
+
     # snapshots (nested under the guest group)
     snap = typer.Typer(help=f"Manage {label} snapshots.", no_args_is_help=True)
 
@@ -1917,6 +1975,42 @@ def _wait_for_agent(ctx: typer.Context, client, node: str, vmid: int) -> None:
                     f"The guest agent in VM {vmid} did not respond within {ctx.obj.timeout}s: {exc}"
                 ) from exc
         time.sleep(_POLL_SECONDS)
+
+
+def _agent_exec_wait(ctx: typer.Context, client, node: str, vmid: int, command: List[str],
+                     input_data: Optional[str]) -> dict:
+    """Run ``command`` through the guest agent and poll until it exits (bounded by --timeout)."""
+    try:
+        pid = client.agent_exec(node, vmid, command, input_data=input_data)["pid"]
+    except Exception as exc:  # noqa: BLE001 - only known agent failures get a hint
+        text = str(exc)
+        if "guest agent" in text.lower():
+            hint = ("exec needs a running VM with qemu-guest-agent installed and the agent "
+                    "option enabled; VMs from `pmox vm up` have both.")
+        elif text.lstrip().startswith("596"):
+            # The agent's "Failed to execute child process" error has curly quotes
+            # that pveproxy cannot encode, so the API connection breaks instead.
+            hint = (f"The guest agent most likely could not start {command[0]!r}: check that it "
+                    "exists in the guest and is executable. There is no shell; use `-- sh -c '...'`.")
+        else:
+            raise
+        raise PmoxError(
+            f"Cannot exec in VM {vmid}: {text}", extra={"vmid": vmid, "node": node, "hint": hint}
+        ) from exc
+    deadline = time.monotonic() + ctx.obj.timeout
+    delay = 0.25
+    while True:
+        status = client.agent_exec_status(node, vmid, pid)
+        if status.get("exited"):
+            return status
+        if time.monotonic() >= deadline:
+            raise TaskTimeout(
+                f"Command in VM {vmid} (guest pid {pid}) did not exit within {ctx.obj.timeout}s; "
+                "it is still running in the guest.",
+                extra={"vmid": vmid, "node": node, "pid": pid},
+            )
+        time.sleep(delay)
+        delay = min(delay * 2, _POLL_SECONDS)
 
 
 def _wait_for_stopped(ctx: typer.Context, client, node: str, vmid: int) -> None:

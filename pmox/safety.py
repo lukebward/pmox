@@ -19,6 +19,7 @@ DESTRUCTIVE_OPS = frozenset(
         "reset",  # hard reset
         "migrate",
         "rollback",
+        "exec",  # arbitrary command as root inside a guest
     }
 )
 

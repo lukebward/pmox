@@ -274,3 +274,25 @@ def test_lxc_interfaces(client, api):
     api.nodes.assert_called_with("pve2")
     api.nodes.return_value.lxc.assert_called_with(200)
     guest.interfaces.get.assert_called_once_with()
+
+
+def test_agent_exec(client, api):
+    guest = api.nodes.return_value.qemu.return_value
+    guest.agent.return_value.post.return_value = {"pid": 42}
+    assert client.agent_exec("pve1", 100, ["nginx", "-t"]) == {"pid": 42}
+    guest.agent.assert_called_with("exec")
+    guest.agent.return_value.post.assert_called_once_with(command=["nginx", "-t"])
+
+
+def test_agent_exec_sends_stdin(client, api):
+    guest = api.nodes.return_value.qemu.return_value
+    client.agent_exec("pve1", 100, ["cat"], input_data="hi")
+    guest.agent.return_value.post.assert_called_once_with(**{"command": ["cat"], "input-data": "hi"})
+
+
+def test_agent_exec_status(client, api):
+    guest = api.nodes.return_value.qemu.return_value
+    guest.agent.return_value.get.return_value = {"exited": 1, "exitcode": 0}
+    assert client.agent_exec_status("pve1", 100, 42) == {"exited": 1, "exitcode": 0}
+    guest.agent.assert_called_with("exec-status")
+    guest.agent.return_value.get.assert_called_once_with(pid=42)

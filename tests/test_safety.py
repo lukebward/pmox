@@ -42,6 +42,7 @@ def test_is_destructive():
     assert is_destructive("delete")
     assert is_destructive("stop")
     assert is_destructive("migrate")
+    assert is_destructive("exec")
     assert not is_destructive("start")
     assert {"rollback", "reset"} <= DESTRUCTIVE_OPS
 

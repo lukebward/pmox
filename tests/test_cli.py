@@ -3113,3 +3113,131 @@ def test_task_wait_rejects_non_upid(fake_client, creds):
     assert r.exit_code == 1, r.output
     assert "not a task UPID" in json.loads(r.output)["message"]
     fake_client.task_status.assert_not_called()
+
+
+# ------------------------------------------------------------------ vm exec --
+
+
+def _exec_client(fake_client, *statuses):
+    fake_client.locate_guest.return_value = {"node": "pve1", "type": "qemu"}
+    fake_client.agent_exec.return_value = {"pid": 42}
+    fake_client.agent_exec_status.side_effect = list(statuses)
+    return fake_client
+
+
+def test_exec_blocked_in_readonly(fake_client, creds):
+    _exec_client(fake_client)
+    r = inv(["vm", "exec", "100", "--yes", "--", "id"], creds)
+    assert r.exit_code == 4, r.output
+    fake_client.agent_exec.assert_not_called()
+
+
+def test_exec_needs_yes(fake_client, creds):
+    _exec_client(fake_client)
+    r = inv(["--dangerous", "vm", "exec", "100", "--", "id"], creds)
+    assert r.exit_code == 3, r.output
+    fake_client.agent_exec.assert_not_called()
+
+
+def test_exec_dry_run_skips_call(fake_client, creds):
+    _exec_client(fake_client)
+    r = inv(["--dry-run", "vm", "exec", "100", "--", "nginx", "-t"], creds)
+    assert r.exit_code == 0, r.output
+    plan = json.loads(r.output)
+    assert plan["op"] == "qemu.exec"
+    assert plan["params"] == {"command": ["nginx", "-t"], "stdin": None}
+    fake_client.agent_exec.assert_not_called()
+
+
+def test_exec_not_available_for_containers(fake_client, creds):
+    r = inv(["--dangerous", "ct", "exec", "100", "--yes", "--", "id"], creds)
+    assert r.exit_code == 2, r.output
+
+
+def test_exec_json_envelope_polls_until_exit(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda s: None)
+    _exec_client(
+        fake_client,
+        {"exited": 0},
+        {"exited": 1, "exitcode": 0, "out-data": "uid=0(root)\n", "out-truncated": 1},
+    )
+    r = inv(["--dangerous", "vm", "exec", "100", "--yes", "--", "id", "--json"], creds)
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output) == {
+        "ok": True, "op": "qemu.exec", "node": "pve1", "vmid": 100, "command": ["id", "--json"],
+        "exitcode": 0, "signal": None, "out": "uid=0(root)\n", "err": "", "truncated": True,
+    }
+    fake_client.agent_exec.assert_called_once_with("pve1", 100, ["id", "--json"], input_data=None)
+    assert fake_client.agent_exec_status.call_count == 2
+
+
+def test_exec_nonzero_exit_code_exits_1(fake_client, creds):
+    _exec_client(fake_client, {"exited": 1, "exitcode": 3, "err-data": "boom\n"})
+    r = inv(["--dangerous", "vm", "exec", "100", "--yes", "--", "false"], creds)
+    assert r.exit_code == 1, r.output
+    body = json.loads(r.output)
+    assert (body["ok"], body["exitcode"], body["err"]) == (False, 3, "boom\n")
+
+
+def test_exec_human_output_passes_streams_through(fake_client, creds):
+    _exec_client(
+        fake_client,
+        {"exited": 1, "exitcode": 0, "out-data": "hello\n", "err-data": "warn\n", "err-truncated": 1},
+    )
+    r = inv(["--dangerous", "--no-json", "vm", "exec", "100", "--yes", "--", "echo", "hello"], creds)
+    assert r.exit_code == 0, r.output
+    assert r.stdout == "hello\n"
+    assert "warn\n" in r.stderr
+    assert "truncated" in plain(r.stderr)
+
+
+def test_exec_stdin_from_file_and_dash(fake_client, creds, tmp_path):
+    src = tmp_path / "in.txt"
+    src.write_text("from-file", encoding="utf-8")
+    _exec_client(fake_client, {"exited": 1, "exitcode": 0}, {"exited": 1, "exitcode": 0})
+    r = inv(["--dangerous", "vm", "exec", "100", "--yes", "--stdin", str(src), "--", "cat"], creds)
+    assert r.exit_code == 0, r.output
+    fake_client.agent_exec.assert_called_with("pve1", 100, ["cat"], input_data="from-file")
+
+    r2 = inv(["--dangerous", "vm", "exec", "100", "--yes", "--stdin", "-", "--", "cat"], creds, input="piped")
+    assert r2.exit_code == 0, r2.output
+    fake_client.agent_exec.assert_called_with("pve1", 100, ["cat"], input_data="piped")
+
+
+def test_exec_agent_down_gets_hint(fake_client, creds):
+    _exec_client(fake_client)
+    fake_client.agent_exec.side_effect = RuntimeError("500 Internal Server Error: QEMU guest agent is not running")
+    r = inv(["--dangerous", "vm", "exec", "100", "--yes", "--", "id"], creds)
+    assert r.exit_code == 1, r.output
+    body = json.loads(r.output)
+    assert body["error"] == "error"
+    assert "qemu-guest-agent" in body["hint"]
+
+
+def test_exec_unstartable_command_gets_hint(fake_client, creds):
+    _exec_client(fake_client)
+    fake_client.agent_exec.side_effect = RuntimeError(
+        "596 Errors during TLS negotiation, request sending and header processing: Broken pipe"
+    )
+    r = inv(["--dangerous", "vm", "exec", "100", "--yes", "--", "no-such-binary"], creds)
+    assert r.exit_code == 1, r.output
+    assert "'no-such-binary'" in json.loads(r.output)["hint"]
+
+
+def test_exec_other_api_error_passes_through(fake_client, creds):
+    _exec_client(fake_client)
+    fake_client.agent_exec.side_effect = RuntimeError("403 Forbidden: Permission check failed")
+    r = inv(["--dangerous", "vm", "exec", "100", "--yes", "--", "id"], creds)
+    assert r.exit_code == 1, r.output
+    assert json.loads(r.output)["error"] == "auth"
+
+
+def test_exec_timeout_reports_guest_pid(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda s: None)
+    monkeypatch.setattr(cli.time, "monotonic", iter([0.0, 999.0]).__next__)
+    _exec_client(fake_client, {"exited": 0})
+    r = inv(["--dangerous", "--timeout", "5", "vm", "exec", "100", "--yes", "--", "sleep", "60"], creds)
+    assert r.exit_code == 1, r.output
+    body = json.loads(r.output)
+    assert body["pid"] == 42
+    assert "still running" in body["message"]

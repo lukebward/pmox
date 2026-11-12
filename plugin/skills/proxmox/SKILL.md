@@ -65,7 +65,7 @@ Destructive operations additionally require `--yes`, a **per-subcommand** flag
 that must be placed **after** the subcommand (unlike the global `--dangerous`).
 The destructive set is:
 `vm delete`, `vm stop`, `vm reset`, `vm migrate`, `vm snapshot rollback`,
-`vm snapshot delete`, `ct delete`, `ct stop`, `ct reset`, `ct migrate`,
+`vm snapshot delete`, `vm exec`, `ct delete`, `ct stop`, `ct reset`, `ct migrate`,
 `ct snapshot rollback`, `ct snapshot delete`, and **`vm set`/`ct set` with a
 `delete=` key**.
 
@@ -173,6 +173,7 @@ pmox vm describe <vmid>                  # consolidated: status + config + snaps
 pmox ct describe <vmid>                  # same for containers
 pmox vm ip <vmid> [--wait]               # live IP(s): agent, static config, or same-LAN ARP scan
 pmox ct ip <vmid>                        # (--all adds loopback, link-local, MACs)
+pmox --dangerous vm exec <vmid> --yes -- <cmd> [args]   # run as root in a VM via the guest agent (no ct exec)
 pmox image list                          # VM cloud image catalog
 pmox image list --ct                     # LXC container templates (node auto-picked)
 pmox template list                       # VM templates; agent-enabled ones marked

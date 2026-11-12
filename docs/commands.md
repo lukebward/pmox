@@ -42,6 +42,7 @@ pmox vm clone <vmid> --newid <id> [--name X] [--full] [--target N]
 pmox vm migrate <vmid> --target N [--online]             (needs --dangerous --yes)
 pmox vm delete <vmid> [--purge]                          (needs --dangerous --yes)
 pmox vm snapshot list|create|delete|rollback <vmid> ...
+pmox vm exec <vmid> [--stdin FILE] -- <cmd> [args]      run a command in the VM as root, via the guest agent (needs --dangerous --yes)
 
 pmox ct ...                          same as `vm`, for LXC containers
 pmox ct describe <ctid>              consolidated view of a container
@@ -60,6 +61,13 @@ pmox template list [--node N]        VM templates cluster-wide; agent ones marke
 pmox template build <image> [--ip <cidr>,gw=<ip>] [--user U] [--vmid N] [--name X]
                                      agent golden template (needs --dangerous)
 ```
+
+`vm exec` runs the command directly (no shell; use `-- sh -c '...'` for one) and
+waits for it, bounded by `--timeout`. It needs `qemu-guest-agent` running in the
+VM, which `vm up` guests have. At a terminal, the command's stdout and stderr
+pass through; JSON mode returns `exitcode`, `out`, `err`, and `truncated`. A
+non-zero guest exit code makes pmox exit 1. Containers have no `ct exec`: the
+Proxmox API has no endpoint for it.
 
 `--as-template` and `--checksum` don't combine — verify the checksum on a plain
 pull first; the cached image is then reused by later provisioning commands.

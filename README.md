@@ -148,6 +148,7 @@ pmox template list                    templates, agent ones marked
 pmox vm set 100 -o cores=4            edit config                (--dangerous)
 pmox vm snapshot create 100 pre       snapshots                  (--dangerous)
 pmox vm start 100                     also shutdown/reboot/...   (--dangerous)
+pmox vm exec 100 --yes -- nginx -t    run a command in a VM      (--dangerous)
 pmox vm stop 100 --yes                also delete/reset/...      (--dangerous)
 pmox storage list / task list / image list
 ```

@@ -6,6 +6,12 @@ All notable changes to pmox are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `pmox vm exec <vmid> -- <command>` runs a command inside a VM as root through the QEMU
+  guest agent, with optional `--stdin`. It is gated as destructive (`--dangerous` and
+  `--yes`), returns `exitcode`/`out`/`err` in JSON mode, and exits 1 on a non-zero guest
+  exit code. Containers are not covered: the Proxmox API has no exec endpoint for LXC.
+
 ## [0.7.2] - 2026-08-22
 
 ### Fixed

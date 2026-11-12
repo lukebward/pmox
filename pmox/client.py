@@ -84,6 +84,17 @@ class ProxmoxClient:
         agent = self._guest(node, "qemu", vmid).agent
         return getattr(agent, "network-get-interfaces").get()
 
+    def agent_exec(self, node: str, vmid, command: list, input_data: Optional[str] = None) -> dict:
+        """Start ``command`` (an argv list) in a VM through the guest agent; returns ``{"pid": N}``."""
+        params: dict = {"command": command}
+        if input_data is not None:
+            params["input-data"] = input_data
+        return self._guest(node, "qemu", vmid).agent("exec").post(**params)
+
+    def agent_exec_status(self, node: str, vmid, pid: int) -> dict:
+        """Status of a guest-agent exec: ``exited``, then ``exitcode`` / ``out-data`` / ``err-data``."""
+        return self._guest(node, "qemu", vmid).agent("exec-status").get(pid=pid)
+
     def lxc_interfaces(self, node: str, vmid) -> list:
         """Network interfaces of a running LXC container (no guest agent needed)."""
         return self._guest(node, "lxc", vmid).interfaces.get()

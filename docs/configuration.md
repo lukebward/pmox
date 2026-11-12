@@ -18,6 +18,10 @@ Create one in Proxmox under *Datacenter → Permissions → API Tokens*. For ful
 management, give the token the privileges it needs — or, for a homelab, uncheck
 "Privilege Separation" so it inherits the user's permissions.
 
+`vm exec` gives root inside the guest. A privilege-separated token needs
+`VM.Monitor` on the VM (Proxmox VE 8) or `VM.GuestAgent.Unrestricted` (Proxmox
+VE 9); grant it only on the VMs or pool that need it.
+
 ## `.env`
 
 pmox discovers `.env` by walking up from the current directory (like `git`

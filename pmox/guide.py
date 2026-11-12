@@ -27,7 +27,7 @@ Safety model (two independent gates)
                      --no-dangerous forces read-only regardless of environment.
 2. --yes / -y        per-SUBCOMMAND flag (goes AFTER the subcommand) required
                      for destructive ops: delete, stop, reset, migrate,
-                     snapshot rollback/delete, and `set` with a delete= key.
+                     snapshot rollback/delete, vm exec, and `set` with a delete= key.
                      Example: pmox --dangerous vm delete 100 --yes
 
 Never try to work around the gates. If you get exit 3 or 4, surface the `need`
