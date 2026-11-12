@@ -6,6 +6,8 @@ All notable changes to pmox are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-11
+
 ### Added
 - `pmox vm exec <vmid> -- <command>` runs a command inside a VM as root through the QEMU
   guest agent, with optional `--stdin`. It is gated as destructive (`--dangerous` and
@@ -304,7 +306,8 @@ Initial release.
 - Claude Code plugin (`plugin/`) with a `proxmox` skill and the
   `/pmox:cluster-status`, `/pmox:list-guests`, and `/pmox:run` commands.
 
-[Unreleased]: https://github.com/lukebward/pmox/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/lukebward/pmox/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/lukebward/pmox/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/lukebward/pmox/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/lukebward/pmox/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/lukebward/pmox/compare/v0.6.0...v0.7.0
