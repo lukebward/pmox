@@ -40,7 +40,7 @@ except ImportError:  # pragma: no cover - reachable only under typer<0.26 (no ve
 from . import __version__, arp, catalog, guestops, guide, ipam, provision, views
 from .client import ProxmoxClient
 from .config import ConfigError, Settings, _parse_bool, load_settings
-from .errors import NotFoundError, PlanError, PmoxError, TaskFailed, TaskTimeout
+from .errors import NotFoundError, PlanError, PmoxError, TaskFailed, TaskTimeout, task_warning_count
 from .output import (
     Column,
     build_kv_table,
@@ -176,6 +176,8 @@ class State:
         self.timeout = timeout
         self.dry_run = dry_run
         self.client: Optional[ProxmoxClient] = None
+        # Tasks that finished "WARNINGS: <n>" (success with warnings); surfaced by _ok.
+        self.task_warnings: List[dict] = []
 
 
 def _get_client(ctx: typer.Context) -> ProxmoxClient:
@@ -236,7 +238,8 @@ def _maybe_wait(ctx: typer.Context, node: str, result):
     """If ``result`` is a task UPID, poll until the task finishes.
 
     Returns the final task-status dict, or the original ``result`` if it is not a
-    UPID. Raises :class:`TaskFailed` / :class:`TaskTimeout` (both carry the upid
+    UPID. A task that ends ``WARNINGS: <n>`` succeeded: it is returned like ``OK``
+    and noted on ``ctx.obj.task_warnings`` so the ok envelope can surface it. Raises :class:`TaskFailed` / :class:`TaskTimeout` (both carry the upid
     and node in ``extra`` so the error envelope stays machine-actionable).
     """
     if not (isinstance(result, str) and result.startswith("UPID:")):
@@ -247,7 +250,8 @@ def _maybe_wait(ctx: typer.Context, node: str, result):
         status = client.task_status(node, result)
         if status.get("status") == "stopped":
             exitstatus = status.get("exitstatus")
-            if exitstatus is not None and exitstatus != "OK":
+            warnings = 0 if exitstatus is None else task_warning_count(exitstatus)
+            if warnings is None:
                 raise TaskFailed(
                     f"Task {result} failed: {exitstatus}",
                     extra={
@@ -256,6 +260,8 @@ def _maybe_wait(ctx: typer.Context, node: str, result):
                         "hint": f"`pmox task log {result} --node {node}` shows the failure details.",
                     },
                 )
+            if warnings:
+                ctx.obj.task_warnings.append({"upid": result, "node": node, "warnings": warnings})
             return status
         if time.monotonic() >= deadline:
             raise TaskTimeout(
@@ -356,9 +362,12 @@ def _ok(ctx: typer.Context, message: str, **fields) -> None:
 
     Typed fields (``op``, ``vmid``, ``node``, ``upid``, ``task``, ``hint``, …)
     let an agent read results without parsing the message prose. Fields passed
-    explicitly are kept even when ``None`` (stable shape).
+    explicitly are kept even when ``None`` (stable shape). ``task_warnings`` is
+    added only when a waited-on task finished with warnings.
     """
     state: State = ctx.obj
+    if state.task_warnings:
+        fields = {**fields, "task_warnings": state.task_warnings}
     if state.json:
         print(json.dumps({"ok": True, "message": message, **fields}, default=str, indent=2))
     else:
@@ -368,6 +377,8 @@ def _ok(ctx: typer.Context, message: str, **fields) -> None:
             console.print(f"  [dim]{detail}[/dim]")
         if fields.get("hint"):
             console.print(f"  [dim]{fields['hint']}[/dim]")
+        for w in state.task_warnings:
+            console.print(f"  [yellow]{w['warnings']} warning(s):[/yellow] pmox task log {w['upid']} --node {w['node']}")
 
 
 def _emit_error(json_output: bool, error: str, message: str, code: int, need=None, extra=None) -> None:

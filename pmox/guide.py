@@ -55,6 +55,8 @@ Success envelope (mutations)
 {"ok": true, "message": "...", "op": "qemu.start", "vmid": 100, "node": "pve1",
  "upid": "UPID:..." | "task": {...final task status...}, "hint": "..."}
 Read vmid/node/upid from the fields — never parse the message prose.
+A task that ends "WARNINGS: <n>" succeeded (not a failure); the envelope then adds
+`task_warnings`: [{"upid", "node", "warnings": n}] — `pmox task log <upid>` shows them.
 `vm up` additionally returns name, ip (null when DHCP), ssh, template (the
 template VMID it cloned, or null) and agent (true when the clone came from an
 agent template, so `vm ip --wait` is agent-backed).

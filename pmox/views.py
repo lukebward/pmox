@@ -12,7 +12,7 @@ from typing import Optional
 
 from . import arp, guestops
 from .catalog import CPU_PRESSURE, MEM_PRESSURE, STORAGE_PRESSURE
-from .errors import NotFoundError
+from .errors import NotFoundError, task_warning_count
 
 _RECENT_TASK_LIMIT = 50
 
@@ -288,7 +288,7 @@ def _task_failure_issues(client, node_name: str) -> list:
         rows.sort(key=lambda r: r.get("starttime") or 0, reverse=True)
         streak = 0
         for row in rows:
-            if str(row.get("exitstatus", "")) == "OK":
+            if task_warning_count(row.get("exitstatus", "")) is not None:
                 break
             streak += 1
         if streak >= 3:

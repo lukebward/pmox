@@ -7,7 +7,24 @@ the CLI's error boundary, so machine-relevant facts (``upid``, ``node``,
 
 from __future__ import annotations
 
+import re
 from typing import Optional
+
+_TASK_WARNINGS = re.compile(r"WARNINGS: (\d+)")
+
+
+def task_warning_count(exitstatus) -> Optional[int]:
+    """Classify a finished task's ``exitstatus``: ``None`` means it failed.
+
+    Proxmox reports success as ``OK`` (0 warnings) or as ``WARNINGS: <n>`` when the
+    task completed but logged warnings (e.g. "Systemd 255 detected. You may need to
+    enable nesting." on container create). Anything else is a real failure.
+    """
+    text = str(exitstatus)
+    if text == "OK":
+        return 0
+    match = _TASK_WARNINGS.fullmatch(text)
+    return int(match.group(1)) if match else None
 
 
 class PmoxError(Exception):
@@ -23,7 +40,7 @@ class TaskTimeout(PmoxError, TimeoutError):
 
 
 class TaskFailed(PmoxError, RuntimeError):
-    """A Proxmox task finished with a non-OK exit status."""
+    """A Proxmox task finished with a failing exit status (not ``OK`` / ``WARNINGS: <n>``)."""
 
 
 class PlanError(PmoxError, RuntimeError):

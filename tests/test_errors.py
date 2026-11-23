@@ -1,5 +1,7 @@
 """The typed-error hierarchy that feeds structured fields into the JSON envelope."""
 
+import pytest
+
 from pmox.errors import NotFoundError, PlanError, PmoxError, TaskFailed, TaskTimeout
 
 
@@ -40,3 +42,18 @@ def test_not_found_error_is_pmox_and_lookup_error():
     assert isinstance(err, PmoxError)
     assert isinstance(err, LookupError)
     assert err.extra == {"hint": "re-list"}
+
+
+@pytest.mark.parametrize("exitstatus, expected", [
+    ("OK", 0),
+    ("WARNINGS: 1", 1),
+    ("WARNINGS: 12", 12),
+    ("unable to create CT 114", None),
+    ("WARNINGS: ", None),
+    ("", None),
+    (None, None),
+])
+def test_task_warning_count(exitstatus, expected):
+    from pmox.errors import task_warning_count
+
+    assert task_warning_count(exitstatus) == expected

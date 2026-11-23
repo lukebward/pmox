@@ -3241,3 +3241,95 @@ def test_exec_timeout_reports_guest_pid(fake_client, creds, monkeypatch):
     body = json.loads(r.output)
     assert body["pid"] == 42
     assert "still running" in body["message"]
+
+
+# ------------------------------------ "WARNINGS: <n>" is success, not failure --
+
+
+def test_maybe_wait_treats_warnings_as_success(monkeypatch):
+    client = MagicMock()
+    client.task_status.return_value = {"status": "stopped", "exitstatus": "WARNINGS: 2"}
+    state = cli.State(settings=None)
+    state.client = client
+    ctx = SimpleNamespace(obj=state)
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    result = cli._maybe_wait(ctx, "pve1", "UPID:pve1:0001")
+    assert result == {"status": "stopped", "exitstatus": "WARNINGS: 2"}
+    assert state.task_warnings == [{"upid": "UPID:pve1:0001", "node": "pve1", "warnings": 2}]
+
+
+@pytest.mark.parametrize("exitstatus", ["WARNINGS: many", "WARNINGS: 1 then died", "ERROR WARNINGS: 1", "warnings"])
+def test_maybe_wait_warning_lookalikes_still_fail(monkeypatch, exitstatus):
+    client = MagicMock()
+    client.task_status.return_value = {"status": "stopped", "exitstatus": exitstatus}
+    state = cli.State(settings=None)
+    state.client = client
+    ctx = SimpleNamespace(obj=state)
+    with pytest.raises(cli.TaskFailed):
+        cli._maybe_wait(ctx, "pve1", "UPID:x")
+    assert state.task_warnings == []
+
+
+def _ct_new_with_create_status(fake_client, monkeypatch, create_status):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.list_appliances.return_value = [{"template": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"}]
+    fake_client.list_storage.return_value = _IMPORT_STORAGES
+    fake_client.storage_content.return_value = []
+    fake_client.download_appliance.return_value = "UPID:apl"
+    fake_client.create_guest.return_value = "UPID:create"
+    fake_client.guest_power.return_value = "UPID:start"
+    fake_client.task_status.side_effect = lambda _node, upid: {
+        "status": "stopped", "exitstatus": create_status if upid == "UPID:create" else "OK",
+    }
+    return ["--dangerous", "ct", "new", "llm", "--template", "ubuntu-24.04", "--node", "pve1",
+            "--vmid", "114", "--disk", "40", "--ip", "dhcp"]
+
+
+def test_ct_new_continues_past_task_warnings(fake_client, creds, monkeypatch):
+    args = _ct_new_with_create_status(fake_client, monkeypatch, "WARNINGS: 1")
+    r = inv(["--json", *args], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["ok"] is True and payload["op"] == "lxc.new" and payload["vmid"] == 114
+    assert payload["task_warnings"] == [{"upid": "UPID:create", "node": "pve1", "warnings": 1}]
+    # the step after the warned create (starting the container) still ran
+    fake_client.guest_power.assert_called_once()
+    assert fake_client.guest_power.call_args.kwargs["action"] == "start"
+
+
+def test_ct_new_task_warnings_human_output(fake_client, creds, monkeypatch):
+    args = _ct_new_with_create_status(fake_client, monkeypatch, "WARNINGS: 1")
+    r = inv(["--no-json", *args], creds)
+    assert r.exit_code == 0, r.output
+    out = " ".join(plain(r.output).split())
+    assert "Created container 114" in out
+    assert "1 warning(s)" in out and "UPID:create" in out
+
+
+def test_ct_new_failed_create_task_still_fails(fake_client, creds, monkeypatch):
+    args = _ct_new_with_create_status(fake_client, monkeypatch, "unable to create CT 114 - storage full")
+    r = inv(["--json", *args], creds)
+    assert r.exit_code == 1, r.output
+    payload = json.loads(r.output)
+    assert payload["ok"] is False
+    assert payload["failed_step"] == "create CT 114"
+    assert "storage full" in payload["message"]
+    assert "task_warnings" not in payload
+    fake_client.guest_power.assert_not_called()
+
+
+def test_ok_envelope_omits_task_warnings_when_clean(fake_client, creds, monkeypatch):
+    args = _ct_new_with_create_status(fake_client, monkeypatch, "OK")
+    r = inv(["--json", *args], creds)
+    assert r.exit_code == 0, r.output
+    assert "task_warnings" not in json.loads(r.output)
+
+
+def test_task_wait_warnings_exit0(fake_client, creds, monkeypatch):
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    fake_client.task_status.return_value = {"status": "stopped", "exitstatus": "WARNINGS: 1"}
+    r = inv(["--json", "task", "wait", _FULL_UPID], creds)
+    assert r.exit_code == 0, r.output
+    payload = json.loads(r.output)
+    assert payload["ok"] is True and payload["task"]["exitstatus"] == "WARNINGS: 1"
+    assert payload["task_warnings"] == [{"upid": _FULL_UPID, "node": "pve9", "warnings": 1}]

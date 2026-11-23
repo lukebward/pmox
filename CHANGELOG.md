@@ -6,6 +6,15 @@ All notable changes to pmox are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A task that Proxmox finishes with `WARNINGS: <n>` (success with warnings, e.g. "Systemd 255
+  detected. You may need to enable nesting." on `ct new`) is no longer treated as a failure.
+  Previously the plan aborted after the guest was already created, so later steps (such as
+  starting it) never ran and the error hinted at deleting a healthy guest. Waited-on tasks
+  that finish with warnings now succeed and are listed in a `task_warnings` field
+  (`upid`, `node`, `warnings`) on the success envelope; `pmox health` no longer counts them
+  towards a task-failure streak.
+
 ## [0.8.1] - 2026-11-11
 
 ### Fixed
