@@ -569,3 +569,22 @@ def test_guest_ip_addresses_static_config_beats_arp(monkeypatch):
     )
     out = views.guest_ip_addresses(c, "qemu", 150, scan=views.arp.ScanConfig())
     assert out["source"] == "config"
+
+
+def test_health_task_warnings_break_failure_streak():
+    c = MagicMock()
+    c.cluster_status.return_value = [
+        {"type": "cluster", "quorate": 1},
+        {"type": "node", "name": "pve1", "online": 1},
+    ]
+    c.list_nodes.return_value = [
+        {"node": "pve1", "status": "online", "cpu": 0, "mem": 0, "maxmem": 10},
+    ]
+    c.cluster_resources.side_effect = lambda type=None: []
+    c.list_tasks.return_value = [
+        {"type": "vzcreate", "status": "stopped", "exitstatus": "WARNINGS: 1",
+         "starttime": 100 * i, "upid": f"UPID:pve1:000{i}:vzcreate"}
+        for i in range(1, 5)
+    ]
+    result = views.summarize_health(c)
+    assert not [i for i in result["issues"] if i["code"] == "task_failures"]
